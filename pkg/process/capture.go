@@ -1,6 +1,7 @@
 package process
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -8,11 +9,12 @@ import (
 
 // OutputCapture manages capturing stdout and stderr from a process.
 type OutputCapture struct {
-	mu      sync.Mutex
-	stdout  *RingBuffer
-	stderr  *RingBuffer
-	merged  *RingBuffer
-	maxSize int64
+	mu        sync.Mutex
+	stdout    *RingBuffer
+	stderr    *RingBuffer
+	merged    *RingBuffer
+	maxSize   int64
+	overflowed bool
 }
 
 // NewOutputCapture creates a new OutputCapture with the given max size per buffer.
@@ -79,6 +81,13 @@ func (oc *OutputCapture) GetMerged() string {
 	return oc.merged.String()
 }
 
+// HasOverflowed checks if any buffer has overflowed.
+func (oc *OutputCapture) HasOverflowed() bool {
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+	return oc.stdout.Overflowed() || oc.stderr.Overflowed() || oc.merged.Overflowed()
+}
+
 // Reset clears all captured output.
 func (oc *OutputCapture) Reset() {
 	oc.mu.Lock()
@@ -86,15 +95,17 @@ func (oc *OutputCapture) Reset() {
 	oc.stdout.Reset()
 	oc.stderr.Reset()
 	oc.merged.Reset()
+	oc.overflowed = false
 }
 
 // RingBuffer is a circular buffer for efficiently storing process output.
 type RingBuffer struct {
-	buf   []byte
-	start int
-	end   int
-	size  int64
-	count int64
+	buf       []byte
+	start     int
+	end       int
+	size      int64
+	count     int64
+	overflowed bool
 }
 
 // NewRingBuffer creates a new RingBuffer with the given max size.
@@ -111,14 +122,24 @@ func NewRingBuffer(maxSize int64) *RingBuffer {
 // Write implements io.Writer.
 func (rb *RingBuffer) Write(p []byte) (n int, err error) {
 	n = len(p)
+	if rb.count >= rb.size {
+		rb.overflowed = true
+		return 0, fmt.Errorf("ring buffer overflow: output exceeds maximum size")
+	}
+	available := rb.size - rb.count
+	if int64(n) > available {
+		rb.overflowed = true
+		for i := int64(0); i < available; i++ {
+			rb.buf[rb.end] = p[i]
+			rb.end = (rb.end + 1) % int(rb.size)
+			rb.count++
+		}
+		return int(available), fmt.Errorf("ring buffer overflow: write exceeds available space")
+	}
 	for _, b := range p {
 		rb.buf[rb.end] = b
 		rb.end = (rb.end + 1) % int(rb.size)
-		if rb.count < rb.size {
-			rb.count++
-		} else {
-			rb.start = (rb.start + 1) % int(rb.size)
-		}
+		rb.count++
 	}
 	return n, nil
 }
@@ -146,6 +167,11 @@ func (rb *RingBuffer) Reset() {
 // Len returns the number of bytes in the buffer.
 func (rb *RingBuffer) Len() int64 {
 	return rb.count
+}
+
+// Overflowed returns true if the ring buffer has overflowed.
+func (rb *RingBuffer) Overflowed() bool {
+	return rb.overflowed
 }
 
 // WriteTo writes the ring buffer contents to an io.Writer.

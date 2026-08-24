@@ -194,7 +194,12 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 			Duration: result.Duration.Milliseconds(),
 		}
 	} else {
-		exec.Status = model.StatusCompleted
+		if result.TimedOut && result.Stdout == "" {
+			exec.Status = model.StatusFailed
+			exec.ErrorMessage = "output capture was interrupted"
+		} else {
+			exec.Status = model.StatusCompleted
+		}
 		exec.Result = &model.ExecutionResult{
 			Stdout:   result.Stdout,
 			Stderr:   result.Stderr,

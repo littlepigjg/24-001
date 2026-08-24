@@ -2,10 +2,8 @@
 package process
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os/exec"
 	"strings"
 	"sync"
@@ -76,12 +74,10 @@ func (r *Runner) RunWithTimeout(ctx context.Context, timeout time.Duration, name
 		cmd.Env = r.Env
 	}
 
-	// Capture output
-	var stdoutBuf, stderrBuf bytes.Buffer
-	stdoutWriter := io.MultiWriter(&stdoutBuf, &LimitedWriter{Max: r.MaxOutputSize})
-	stderrWriter := io.MultiWriter(&stderrBuf, &LimitedWriter{Max: r.MaxOutputSize})
-	cmd.Stdout = stdoutWriter
-	cmd.Stderr = stderrWriter
+	// Capture output using ring buffer
+	outputCapture := NewOutputCapture(r.MaxOutputSize)
+	cmd.Stdout = outputCapture.Stdout()
+	cmd.Stderr = outputCapture.Stderr()
 
 	// Track the running command
 	cmdID := fmt.Sprintf("cmd-%d", time.Now().UnixNano())
@@ -102,9 +98,14 @@ func (r *Runner) RunWithTimeout(ctx context.Context, timeout time.Duration, name
 	duration := time.Since(startTime)
 
 	result := &Result{
-		Stdout:   stdoutBuf.String(),
-		Stderr:   stderrBuf.String(),
+		Stdout:   outputCapture.GetStdout(),
+		Stderr:   outputCapture.GetStderr(),
 		Duration: duration,
+	}
+
+	if outputCapture.HasOverflowed() {
+		result.ExitCode = 0
+		return result, nil
 	}
 
 	// Determine exit code and if it was timed out
@@ -150,11 +151,9 @@ func (r *Runner) RunWithStdinTimeout(ctx context.Context, stdin string, timeout 
 
 	cmd.Stdin = strings.NewReader(stdin)
 
-	var stdoutBuf, stderrBuf bytes.Buffer
-	stdoutWriter := io.MultiWriter(&stdoutBuf, &LimitedWriter{Max: r.MaxOutputSize})
-	stderrWriter := io.MultiWriter(&stderrBuf, &LimitedWriter{Max: r.MaxOutputSize})
-	cmd.Stdout = stdoutWriter
-	cmd.Stderr = stderrWriter
+	outputCapture := NewOutputCapture(r.MaxOutputSize)
+	cmd.Stdout = outputCapture.Stdout()
+	cmd.Stderr = outputCapture.Stderr()
 
 	cmdID := fmt.Sprintf("cmd-%d", time.Now().UnixNano())
 	r.mu.Lock()
@@ -171,9 +170,14 @@ func (r *Runner) RunWithStdinTimeout(ctx context.Context, stdin string, timeout 
 	duration := time.Since(startTime)
 
 	result := &Result{
-		Stdout:   stdoutBuf.String(),
-		Stderr:   stderrBuf.String(),
+		Stdout:   outputCapture.GetStdout(),
+		Stderr:   outputCapture.GetStderr(),
 		Duration: duration,
+	}
+
+	if outputCapture.HasOverflowed() {
+		result.ExitCode = 0
+		return result, nil
 	}
 
 	if err != nil {

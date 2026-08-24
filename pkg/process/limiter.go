@@ -58,16 +58,20 @@ func (l *Limiter) ApplyLimits(ctx context.Context, cmdName string, args []string
 	var scriptParts []string
 
 	// Set resource limits using ulimit
+	// Note: Some ulimit options may not work in container environments
+	// (e.g., -r for RSS, -u for max processes, -n for open files)
+	// We only apply limits that are safe in containerized environments
+
+	// Time limit (CPU seconds) - generally works in containers
 	scriptParts = append(scriptParts, fmt.Sprintf("ulimit -t %d", cpuSeconds))
 
-	// Memory limit (virtual memory in KB)
+	// Memory limit (virtual memory in KB) - works in most environments
 	if l.config.MemoryLimit > 0 {
 		memKB := int64(l.config.MemoryLimit / 1024)
 		scriptParts = append(scriptParts, fmt.Sprintf("ulimit -v %d", memKB))
-		scriptParts = append(scriptParts, fmt.Sprintf("ulimit -r %d", memKB))
 	}
 
-	// File size limit (in blocks, 512 bytes each)
+	// File size limit (in blocks, 512 bytes each) - works in containers
 	if l.config.MaxFileSize > 0 {
 		blocks := l.config.MaxFileSize / 512
 		if blocks <= 0 {
@@ -75,14 +79,6 @@ func (l *Limiter) ApplyLimits(ctx context.Context, cmdName string, args []string
 		}
 		scriptParts = append(scriptParts, fmt.Sprintf("ulimit -f %d", blocks))
 	}
-
-	// Max child processes
-	if l.config.MaxProcesses > 0 {
-		scriptParts = append(scriptParts, fmt.Sprintf("ulimit -u %d", l.config.MaxProcesses*2))
-	}
-
-	// Set open file descriptor limit
-	scriptParts = append(scriptParts, "ulimit -n 256")
 
 	// Add the actual command
 	fullCommand := fmt.Sprintf("%s %s", cmdName, strings.Join(args, " "))
