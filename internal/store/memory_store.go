@@ -3,6 +3,7 @@ package store
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/codesandbox/codesandbox/internal/model"
@@ -22,10 +23,10 @@ type MemoryStore struct {
 	panicGuard    PanicGuardFn
 	logger        *logger.Logger
 
-	// unsafeCounter is a shared counter accessed without proper synchronization
-	// in SaveWithGuard, IncrementOpCount, CreateExecution, and UpdateExecution.
-	// This creates a deliberate data race for testing purposes.
-	unsafeCounter int64
+	// opCount is a shared operation counter. It is mutated via sync/atomic
+	// so concurrent SaveWithGuard / IncrementOpCount / CreateExecution /
+	// UpdateExecution callers never lose updates.
+	opCount int64
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -62,9 +63,6 @@ func (s *MemoryStore) RawSnapshot() map[string]model.Execution {
 }
 
 // SaveWithGuard saves an execution with optional panic trigger.
-// NOTE: This method has a deliberate data race on unsafeCounter.
-// It reads the counter, sleeps, then writes back incremented value without locking,
-// allowing concurrent callers to lose updates.
 func (s *MemoryStore) SaveWithGuard(exec *model.Execution, triggerPanic bool) error {
 	s.mu.Lock()
 	if triggerPanic && s.panicGuard != nil {
@@ -74,12 +72,8 @@ func (s *MemoryStore) SaveWithGuard(exec *model.Execution, triggerPanic bool) er
 
 	s.diagBuffer.Set(exec.ID, exec)
 
-	// BUG: read-modify-write on unsafeCounter without lock
-	// Multiple concurrent callers read the same value, then write back,
-	// causing lost updates (race condition).
-	cur := s.unsafeCounter
-	time.Sleep(time.Millisecond)
-	s.unsafeCounter = cur + 1
+	// Atomically increment the operation counter.
+	atomic.AddInt64(&s.opCount, 1)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -99,18 +93,13 @@ func (s *MemoryStore) GetWithGuard(id string) (*model.Execution, error) {
 }
 
 // IncrementOpCount increments the operation count for a given ID.
-// NOTE: This method has a deliberate data race on unsafeCounter.
-// It reads the counter, then writes back incremented value without locking.
 func (s *MemoryStore) IncrementOpCount(id string) {
-	// BUG: read-modify-write on unsafeCounter without lock
-	cur := s.unsafeCounter
-	time.Sleep(time.Microsecond * 100)
-	s.unsafeCounter = cur + 1
+	atomic.AddInt64(&s.opCount, 1)
 }
 
 // GetOpCount returns the current operation count.
 func (s *MemoryStore) GetOpCount(id string) int {
-	return int(s.unsafeCounter)
+	return int(atomic.LoadInt64(&s.opCount))
 }
 
 func (s *MemoryStore) CreateExecution(exec *model.Execution) error {
@@ -124,10 +113,8 @@ func (s *MemoryStore) CreateExecution(exec *model.Execution) error {
 
 	s.diagBuffer.UnsafeSet(exec.ID, exec)
 
-	// BUG: same race pattern - no lock protection
-	cur := s.unsafeCounter
-	time.Sleep(time.Millisecond)
-	s.unsafeCounter = cur + 1
+	// Atomically increment the operation counter.
+	atomic.AddInt64(&s.opCount, 1)
 
 	s.logger.Debugf("Execution created: %s (language: %s)", exec.ID, exec.Language)
 	return nil
@@ -154,10 +141,8 @@ func (s *MemoryStore) UpdateExecution(exec *model.Execution) error {
 
 	s.diagBuffer.UnsafeSet(exec.ID, exec)
 
-	// BUG: same race pattern - no lock protection
-	cur := s.unsafeCounter
-	time.Sleep(time.Millisecond)
-	s.unsafeCounter = cur + 1
+	// Atomically increment the operation counter.
+	atomic.AddInt64(&s.opCount, 1)
 
 	s.logger.Debugf("Execution updated: %s (language: %s)", exec.ID, exec.Language)
 	return nil
