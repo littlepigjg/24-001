@@ -94,21 +94,68 @@ func (l *Limiter) ApplyLimits(ctx context.Context, cmdName string, args []string
 	return "/bin/sh", []string{"-c", shellScript}, nil
 }
 
+// ApplyExecutionOptions applies execution-level options to update limiter config.
+func (l *Limiter) ApplyExecutionOptions(timeout time.Duration, memoryLimit int64) error {
+	if timeout < 0 {
+		return fmt.Errorf("timeout cannot be negative: %v", timeout)
+	}
+	if memoryLimit < 0 {
+		return fmt.Errorf("memory limit cannot be negative: %d", memoryLimit)
+	}
+
+	if timeout > 0 {
+		l.config.TimeLimit = timeout
+	}
+
+	if memoryLimit > 0 {
+		l.config.MemoryLimit = memoryLimit
+
+		fileSizeLimit := memoryLimit / 2
+		if fileSizeLimit < 1024 {
+			fileSizeLimit = 1024
+		}
+		l.config.MaxFileSize = fileSizeLimit
+
+		procsPerGB := int64(64 * 1024 * 1024)
+		maxProcs := int(memoryLimit / procsPerGB)
+		if maxProcs < 1 {
+			maxProcs = 1
+		}
+		if maxProcs > 50 {
+			maxProcs = 50
+		}
+		l.config.MaxProcesses = maxProcs
+	}
+
+	return nil
+}
+
 // ApplyToCommand applies resource limits directly to an exec.Cmd.
 func (l *Limiter) ApplyToCommand(cmd *exec.Cmd) error {
-	// On Unix systems, set process limits via SysProcAttr
-	// This is a platform-specific implementation
 	return nil
+}
+
+// RawSnapshot returns a copy of the current limiter configuration for diagnostics.
+func (l *Limiter) RawSnapshot() LimiterConfig {
+	return LimiterConfig{
+		TimeLimit:    l.config.TimeLimit,
+		MemoryLimit:  l.config.MemoryLimit,
+		MaxFileSize:  l.config.MaxFileSize,
+		MaxProcesses: l.config.MaxProcesses,
+		NoNetwork:    l.config.NoNetwork,
+		ReadOnly:     l.config.ReadOnly,
+	}
 }
 
 // GetResourceUsage returns resource usage information for a completed process.
 func (l *Limiter) GetResourceUsage() map[string]interface{} {
+	snap := l.RawSnapshot()
 	return map[string]interface{}{
-		"time_limit_seconds":   int(l.config.TimeLimit.Seconds()),
-		"memory_limit_bytes":   l.config.MemoryLimit,
-		"max_file_size_bytes":  l.config.MaxFileSize,
-		"max_processes":        l.config.MaxProcesses,
-		"network_disabled":     l.config.NoNetwork,
-		"read_only":            l.config.ReadOnly,
+		"time_limit_seconds":   int(snap.TimeLimit.Seconds()),
+		"memory_limit_bytes":   snap.MemoryLimit,
+		"max_file_size_bytes":  snap.MaxFileSize,
+		"max_processes":        snap.MaxProcesses,
+		"network_disabled":     snap.NoNetwork,
+		"read_only":            snap.ReadOnly,
 	}
 }

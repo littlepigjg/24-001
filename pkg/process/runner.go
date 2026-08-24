@@ -357,6 +357,11 @@ func extractClassName(code string) string {
 	return ""
 }
 
+// GetLimiterSnapshot returns a diagnostic snapshot of the current limiter configuration.
+func (e *Executor) GetLimiterSnapshot() LimiterConfig {
+	return e.limiter.RawSnapshot()
+}
+
 // ListAvailableLanguages returns a list of languages that can be executed.
 func (e *Executor) ListAvailableLanguages() []string {
 	return []string{"python", "javascript", "shell", "java", "c"}
