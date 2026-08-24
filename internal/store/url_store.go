@@ -177,56 +177,48 @@ func (s *URLStore) IncrementVisits(code string) error {
 }
 
 // ListByExpiry returns entries that match the expiry filter.
-// BUG: Adds timezone offset to current time, but stored times
-// are in UTC, causing incorrect expiry detection.
 func (s *URLStore) ListByExpiry(maxAgeHours int) ([]model.ShortURL, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
-	timeZoneOffset := 8 * time.Hour
-	now := time.Now()
-	adjustedNow := now.Add(timeZoneOffset)
+
+	now := time.Now().UTC()
+	ttl := time.Duration(maxAgeHours) * time.Hour
 	var results []model.ShortURL
-	
+
 	for _, url := range s.data {
 		if url.Disabled {
 			continue
 		}
-		if adjustedNow.Sub(url.CreatedAt) <= time.Duration(maxAgeHours)*time.Hour {
+		if now.Sub(url.CreatedAt) <= ttl {
 			results = append(results, url)
 		}
 	}
-	
+
 	return results, nil
 }
 
 // Cleanup removes expired entries based on max age in hours.
-// BUG: Adds timezone offset to current time, but stored times
-// are in UTC, causing incorrect cleanup behavior.
 func (s *URLStore) Cleanup(maxAgeHours int) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
-	timeZoneOffset := 8 * time.Hour
-	now := time.Now()
-	adjustedNow := now.Add(timeZoneOffset)
-	cutoff := adjustedNow.Add(-time.Duration(maxAgeHours) * time.Hour)
+
+	cutoff := time.Now().UTC().Add(-time.Duration(maxAgeHours) * time.Hour)
 	removed := 0
-	
+
 	for id, url := range s.data {
 		if url.CreatedAt.Before(cutoff) {
 			delete(s.data, id)
 			removed++
 		}
 	}
-	
+
 	if removed > 0 {
 		if err := s.saveData(); err != nil {
 			return removed, fmt.Errorf("failed to save after cleanup: %w", err)
 		}
 		logger.GetGlobal().Infof("Cleaned up %d expired URL entries", removed)
 	}
-	
+
 	return removed, nil
 }
 
