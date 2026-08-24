@@ -1,8 +1,10 @@
-// Package main is the entry point for the Code Sandbox server.
 package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -10,141 +12,157 @@ import (
 	"time"
 
 	"github.com/codesandbox/codesandbox/internal/config"
-	"github.com/codesandbox/codesandbox/internal/handler"
+	"github.com/codesandbox/codesandbox/internal/model"
 	"github.com/codesandbox/codesandbox/internal/service"
 	"github.com/codesandbox/codesandbox/internal/store"
-	"github.com/codesandbox/codesandbox/pkg/logger"
-	"github.com/codesandbox/codesandbox/pkg/process"
 )
 
-const (
-	// version is the application version.
-	version = "1.0.0"
-)
+type Server struct {
+	urlSvc   *service.URLService
+	redirSvc *service.RedirectService
+	urlStore *store.URLStore
+	logStore *store.AccessLogStore
+	cfg      *config.Config
+}
 
 func main() {
-	// Initialize logger
-	log := logger.NewLogger(os.Stdout, logger.LevelInfo)
-	logger.SetGlobal(log)
+	cfg := config.Default()
 
-	log.Infof("Starting Code Sandbox v%s", version)
-
-	// Load configuration
-	cfgMgr := config.GetGlobal()
-	cfg := cfgMgr.GetConfig()
-
-	// Load from environment
-	cfgMgr.LoadFromEnv()
-	cfg = cfgMgr.GetConfig()
-
-	// Validate configuration
-	if err := cfgMgr.Validate(); err != nil {
-		log.Fatalf("Invalid configuration: %v", err)
-	}
-
-	// Initialize store
-	dataStore, err := store.NewStore(cfg.StorageType, cfg.DataDir)
+	us, err := store.NewURLStore(cfg)
 	if err != nil {
-		log.Fatalf("Failed to initialize store: %v", err)
+		log.Fatalf("Failed to create URLStore: %v", err)
 	}
 
-	// Initialize executor
-	executor := process.NewExecutor()
-
-	// Initialize services
-	langSvc := service.NewLanguageService(executor)
-	historySvc := service.NewHistoryService(dataStore)
-	templateSvc := service.NewTemplateService(dataStore)
-	validator := service.NewCodeValidator()
-	execSvc := service.NewExecutionService(dataStore, historySvc, templateSvc, langSvc, cfgMgr)
-	sandboxSvc := service.NewSandboxService(executor, cfg.SandboxDir)
-
-	// Initialize sandbox
-	if err := sandboxSvc.Initialize(); err != nil {
-		log.Warnf("Failed to initialize sandbox: %v", err)
+	ls, err := store.NewAccessLogStore(cfg)
+	if err != nil {
+		log.Fatalf("Failed to create AccessLogStore: %v", err)
 	}
 
-	// Initialize default templates
-	if cfg.EnableTemplates {
-		if err := templateSvc.InitializeDefaults(); err != nil {
-			log.Warnf("Failed to initialize default templates: %v", err)
-		}
+	if err := ls.Open(context.Background()); err != nil {
+		log.Fatalf("Failed to open AccessLogStore: %v", err)
 	}
 
-	// Start periodic cleanup
-	sandboxSvc.StartPeriodicCleanup(time.Duration(cfg.CleanupInterval) * time.Minute)
+	urlSvc, err := service.NewURLService(cfg, us)
+	if err != nil {
+		log.Fatalf("Failed to create URLService: %v", err)
+	}
 
-	// Initialize handlers
-	execHandler := handler.NewExecutionHandler(execSvc, validator)
-	histHandler := handler.NewHistoryHandler(historySvc)
-	tmplHandler := handler.NewTemplateHandler(templateSvc)
-	langHandler := handler.NewLanguageHandler(langSvc)
-	healthHandler := handler.NewHealthHandler()
-	validateHandler := handler.NewValidateHandler(validator)
+	redirSvc, err := service.NewRedirectService(us, ls)
+	if err != nil {
+		log.Fatalf("Failed to create RedirectService: %v", err)
+	}
 
-	// Setup routes
-	router := handler.SetupRoutes(handler.RouterConfig{
-		ExecutionHandler: execHandler,
-		HistoryHandler:   histHandler,
-		TemplateHandler:  tmplHandler,
-		LanguageHandler:  langHandler,
-		HealthHandler:    healthHandler,
-		ValidateHandler:  validateHandler,
-		StaticDir:        "web/static",
-	})
+	srv := &Server{
+		urlSvc:   urlSvc,
+		redirSvc: redirSvc,
+		urlStore: us,
+		logStore: ls,
+		cfg:      cfg,
+	}
 
-	// Create HTTP server
+	mux := http.NewServeMux()
+	
+	// Health check endpoint
+	mux.HandleFunc("/health", srv.healthHandler)
+	
+	// API endpoints
+	mux.HandleFunc("/api/v1/urls", srv.createURLHandler)
+	mux.HandleFunc("/api/v1/urls/", srv.redirectHandler)
+
+	addr := ":8080"
+	log.Printf("Starting server on %s", addr)
+
 	server := &http.Server{
-		Addr:         cfg.Address(),
-		Handler:      router,
-		ReadTimeout:  cfg.GetReadTimeout(),
-		WriteTimeout: cfg.GetWriteTimeout(),
-		IdleTimeout:  120 * time.Second,
-	}
-
-	// Channel to listen for errors from server
-	errCh := make(chan error, 1)
-
-	// Start server
-	go func() {
-		log.Infof("Server listening on %s", cfg.Address())
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			errCh <- err
-		}
-	}()
-
-	// Wait for interrupt signal or server error
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-
-	select {
-	case sig := <-quit:
-		log.Infof("Received signal %v, shutting down...", sig)
-	case err := <-errCh:
-		log.Errorf("Server error: %v", err)
-	case <-time.After(1 * time.Hour * 24 * 365): // Wait indefinitely
+		Addr:         addr,
+		Handler:      mux,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
 	}
 
 	// Graceful shutdown
-	log.Info("Shutting down server...")
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+		log.Println("Shutting down server...")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 
-	// Stop accepting new connections
-	if err := server.Shutdown(ctx); err != nil {
-		log.Errorf("Server shutdown error: %v", err)
+		if err := server.Shutdown(ctx); err != nil {
+			log.Printf("Server shutdown error: %v", err)
+		}
+
+		_ = ls.Close()
+		_ = us.Close()
+		log.Println("Server stopped")
+	}()
+
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatalf("Server failed: %v", err)
+	}
+}
+
+func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	resp := map[string]string{
+		"status": "ok",
+	}
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (s *Server) createURLHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
 
-	// Wait for running executions to complete
-	log.Info("Waiting for executions to complete...")
-	if err := execSvc.WaitForCompletion(10 * time.Second); err != nil {
-		log.Warnf("Timeout waiting for executions: %v", err)
+	var req model.CreateReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
 	}
 
-	// Cleanup
-	execSvc.Cleanup()
-	historySvc.Cleanup(24 * time.Hour)
+	ctx := r.Context()
+	url, err := s.urlSvc.Create(ctx, &req)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to create URL: %v", err), http.StatusInternalServerError)
+		return
+	}
 
-	log.Info("Server stopped successfully")
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(url)
+}
+
+func (s *Server) redirectHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract code from path: /api/v1/urls/{code}
+	path := r.URL.Path
+	code := ""
+	if len(path) > len("/api/v1/urls/") {
+		code = path[len("/api/v1/urls/"):]
+	}
+
+	if code == "" {
+		http.Error(w, "Code is required", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	result, err := s.redirSvc.HandleRedirect(ctx, &service.RedirectRequest{
+		Code:      code,
+		Timestamp: time.Now(),
+	})
+
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Redirect failed: %v", err), http.StatusNotFound)
+		return
+	}
+
+	// Perform redirect
+	http.Redirect(w, r, result.RawURL, result.Status)
 }
