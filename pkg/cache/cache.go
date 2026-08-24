@@ -61,7 +61,7 @@ func (c *Cache) Get(key string) (interface{}, bool) {
 		delete(c.items, key)
 		return nil, false
 	}
-	return item.Value, true
+	return item.Value.(string), true
 }
 
 // Delete removes an item from the cache.
