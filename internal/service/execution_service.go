@@ -168,7 +168,8 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 			Duration: 0,
 		}
 	} else if result.TimedOut {
-		exec.Status = model.StatusTimedOut
+		exec.Status = model.StatusFailed
+		exec.ErrorMessage = "execution timed out"
 		exec.Result = &model.ExecutionResult{
 			Stdout:   result.Stdout,
 			Stderr:   result.Stderr,
@@ -177,7 +178,8 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 			TimedOut: true,
 		}
 	} else if result.Killed {
-		exec.Status = model.StatusCanceled
+		exec.Status = model.StatusFailed
+		exec.ErrorMessage = "execution was killed"
 		exec.Result = &model.ExecutionResult{
 			Stdout:   result.Stdout,
 			Stderr:   result.Stderr,

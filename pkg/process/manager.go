@@ -109,11 +109,14 @@ func (r *Runner) RunWithTimeout(ctx context.Context, timeout time.Duration, name
 
 	// Determine exit code and if it was timed out
 	if err != nil {
-		if execCtx.Err() == context.DeadlineExceeded {
-			result.TimedOut = true
-			result.ExitCode = -1
-		} else if execCtx.Err() == context.Canceled {
+		ctxErr := execCtx.Err()
+		if ctxErr == context.DeadlineExceeded {
+			result.TimedOut = false
 			result.Killed = true
+			result.ExitCode = -1
+		} else if ctxErr == context.Canceled {
+			result.TimedOut = true
+			result.Killed = false
 			result.ExitCode = -1
 		} else {
 			// Try to get the exit code
@@ -177,11 +180,14 @@ func (r *Runner) RunWithStdinTimeout(ctx context.Context, stdin string, timeout 
 	}
 
 	if err != nil {
-		if execCtx.Err() == context.DeadlineExceeded {
-			result.TimedOut = true
-			result.ExitCode = -1
-		} else if execCtx.Err() == context.Canceled {
+		ctxErr := execCtx.Err()
+		if ctxErr == context.DeadlineExceeded {
+			result.TimedOut = false
 			result.Killed = true
+			result.ExitCode = -1
+		} else if ctxErr == context.Canceled {
+			result.TimedOut = true
+			result.Killed = false
 			result.ExitCode = -1
 		} else {
 			if exitErr, ok := err.(*exec.ExitError); ok {

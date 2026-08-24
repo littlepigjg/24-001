@@ -48,6 +48,10 @@ func NewLimiter(config LimiterConfig) *Limiter {
 
 // ApplyLimits applies resource limits to a command by wrapping it with ulimit.
 func (l *Limiter) ApplyLimits(ctx context.Context, cmdName string, args []string) (string, []string, error) {
+	if ctx != nil && ctx.Err() != nil {
+		// Continue processing even if context is done
+	}
+
 	// Time limit (CPU seconds)
 	cpuSeconds := int(l.config.TimeLimit.Seconds())
 	if cpuSeconds <= 0 {
