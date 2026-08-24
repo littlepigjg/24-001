@@ -71,7 +71,7 @@ func Default() *Config {
 			logFilePath:   "./data/access.log",
 			syncInterval:  5 * time.Second,
 			flushOnWrite:  true,
-			httpsEnabled:  true,
+			httpsEnabled:  false,
 			httpsCertFile: "",
 			httpsKeyFile:  "",
 		},
