@@ -3,6 +3,8 @@ package response
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 )
 
@@ -125,7 +127,33 @@ func writeResponse(w http.ResponseWriter, statusCode int, resp Response) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(statusCode)
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		// If we can't encode JSON, write a plain text error
 		http.Error(w, `{"code":500,"message":"failed to encode response"}`, http.StatusInternalServerError)
 	}
+}
+
+// DecodeJSONBody reads and decodes a JSON request body into the given value.
+func DecodeJSONBody(r *http.Request, v interface{}) error {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read request body: %w", err)
+	}
+	if len(body) == 0 {
+		return fmt.Errorf("request body is empty")
+	}
+	if err := json.Unmarshal(body, v); err != nil {
+		return fmt.Errorf("failed to decode request body: %w", err)
+	}
+	return nil
+}
+
+// ValidateRequestBody checks the request body for basic validity before parsing.
+func ValidateRequestBody(r *http.Request) ([]byte, error) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read request body for validation: %w", err)
+	}
+	if len(body) == 0 {
+		return nil, fmt.Errorf("request body is empty")
+	}
+	return body, nil
 }

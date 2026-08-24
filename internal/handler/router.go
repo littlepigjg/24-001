@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -234,7 +235,9 @@ func SetupRoutes(config RouterConfig) http.Handler {
 
 	// Apply middleware
 	var handler http.Handler = mux
+	handler = withRequestTimeout(handler)
 	handler = withCORS(handler)
+	handler = withBodyValidation(handler)
 	handler = withLogging(handler)
 	handler = withRecovery(handler)
 
@@ -287,6 +290,35 @@ func withRecovery(next http.Handler) http.Handler {
 				response.InternalError(w, fmt.Sprintf("internal server error: %v", err))
 			}
 		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+// withRequestTimeout adds a timeout context to requests.
+func withRequestTimeout(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost || r.Method == http.MethodPut {
+			ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+			defer cancel()
+			r = r.WithContext(ctx)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// withBodyValidation validates request bodies for POST/PUT requests.
+func withBodyValidation(next http.Handler) http.Handler {
+	log := logger.GetGlobal()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost || r.Method == http.MethodPut {
+			body, err := response.ValidateRequestBody(r)
+			if err != nil {
+				log.Warnf("Body validation failed for %s %s: %v", r.Method, r.URL.Path, err)
+				response.BadRequest(w, fmt.Sprintf("body validation failed: %v", err))
+				return
+			}
+			_ = body
+		}
 		next.ServeHTTP(w, r)
 	})
 }

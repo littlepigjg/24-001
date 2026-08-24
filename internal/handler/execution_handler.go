@@ -2,7 +2,7 @@
 package handler
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -37,31 +37,39 @@ func (h *ExecutionHandler) Execute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req model.ExecutionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	_, err := response.ValidateRequestBody(r)
+	if err != nil {
 		response.BadRequest(w, fmt.Sprintf("invalid request body: %v", err))
 		return
 	}
 
-	// Validate request
+	var req model.ExecutionRequest
+	if err := response.DecodeJSONBody(r, &req); err != nil {
+		response.BadRequest(w, fmt.Sprintf("invalid request body: %v", err))
+		return
+	}
+
 	validationErrors := req.Validate()
 	if len(validationErrors) > 0 {
 		response.BadRequest(w, fmt.Sprintf("validation failed: %v", validationErrors))
 		return
 	}
 
-	// Code safety validation
 	safetyResult := h.validator.Validate(req.Code, req.Language)
 	if !safetyResult.Valid {
 		response.BadRequest(w, fmt.Sprintf("code safety check failed: %v", safetyResult.Errors))
 		return
 	}
 
-	// Execute the code
-	exec, err := h.svc.Execute(r.Context(), &req)
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	exec, err := h.svc.Execute(ctx, &req)
 	if err != nil {
 		if strings.Contains(err.Error(), "unsupported language") {
 			response.BadRequest(w, err.Error())
+		} else if ctx.Err() == context.DeadlineExceeded {
+			response.InternalError(w, "execution request timed out")
 		} else {
 			response.InternalError(w, fmt.Sprintf("failed to execute code: %v", err))
 		}
@@ -159,8 +167,14 @@ func (h *ExecutionHandler) BatchExecute(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	_, err := response.ValidateRequestBody(r)
+	if err != nil {
+		response.BadRequest(w, fmt.Sprintf("invalid request body: %v", err))
+		return
+	}
+
 	var reqs []model.ExecutionRequest
-	if err := json.NewDecoder(r.Body).Decode(&reqs); err != nil {
+	if err := response.DecodeJSONBody(r, &reqs); err != nil {
 		response.BadRequest(w, fmt.Sprintf("invalid request body: %v", err))
 		return
 	}
