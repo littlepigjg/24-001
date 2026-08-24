@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/codesandbox/codesandbox/internal/model"
 	"github.com/codesandbox/codesandbox/internal/store"
 )
 
@@ -56,17 +57,24 @@ func (s *RedirectService) HandleRedirect(ctx context.Context, req *RedirectReque
 		}, nil
 	}
 
-	u.Visits++
-	if err := s.urlStore.Save(u, true); err != nil {
+	// Increment Visits atomically under the store lock so concurrent
+	// redirects cannot lose updates (the previous Get -> Visits++ -> Save
+	// sequence raced on the shared map entry).
+	var rawURL string
+	if err := s.urlStore.Update(req.Code, func(u *model.ShortURL) error {
+		u.Visits++
+		rawURL = u.RawURL
+		return nil
+	}); err != nil {
 		return nil, fmt.Errorf("failed to update visit count: %w", err)
 	}
 
 	if s.logStore != nil {
-		s.logStore.WriteLog(fmt.Sprintf("redirect code=%s url=%s ip=internal", req.Code, u.RawURL))
+		s.logStore.WriteLog(fmt.Sprintf("redirect code=%s url=%s ip=internal", req.Code, rawURL))
 	}
 
 	return &RedirectResult{
-		RawURL: u.RawURL,
+		RawURL: rawURL,
 		Status: 302,
 	}, nil
 }

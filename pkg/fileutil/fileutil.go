@@ -3,6 +3,7 @@ package fileutil
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -140,12 +141,58 @@ func ReadJSONFile(path string, target interface{}) (bool, error) {
 }
 
 // WriteFileContent writes content to a file.
+//
+// Note: this is not atomic. A crash or concurrent writer mid-call may leave
+// a truncated file. Prefer WriteFileAtomic for data that must not be lost.
 func WriteFileContent(path, content string) error {
 	dir := filepath.Dir(path)
 	if err := EnsureDirectory(dir); err != nil {
 		return err
 	}
 	return os.WriteFile(path, []byte(content), 0644)
+}
+
+// WriteFileAtomic writes data to path atomically: it writes to a temp file in
+// the same directory, fsyncs it, and renames it into place. Concurrent writers
+// do not corrupt each other (one wins) and a crash mid-write never leaves a
+// truncated or partially-written final file.
+func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := EnsureDirectory(dir); err != nil {
+		return err
+	}
+
+	tmp, err := os.CreateTemp(dir, ".tmp-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+	// Best-effort cleanup if anything below fails.
+	cleanup := func() { os.Remove(tmpName) }
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		cleanup()
+		return fmt.Errorf("failed to write temp file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		cleanup()
+		return fmt.Errorf("failed to sync temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return fmt.Errorf("failed to close temp file: %w", err)
+	}
+	if err := os.Chmod(tmpName, perm); err != nil {
+		cleanup()
+		return fmt.Errorf("failed to chmod temp file: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		cleanup()
+		return fmt.Errorf("failed to rename temp file: %w", err)
+	}
+	return nil
 }
 
 // Cleanup removes a temporary file or directory.
