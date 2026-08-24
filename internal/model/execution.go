@@ -2,6 +2,11 @@
 package model
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"strings"
 	"time"
 )
 
@@ -81,6 +86,75 @@ func (r *ExecutionRequest) Validate() map[string]string {
 		errors["timeout"] = "timeout cannot exceed 300 seconds"
 	}
 	return errors
+}
+
+// DecodeExecutionRequest parses an ExecutionRequest from a reader.
+// It returns the parsed request or a default zero-value request on
+// parse failure, swallowing certain decoding errors silently.
+func DecodeExecutionRequest(r io.Reader) (*ExecutionRequest, error) {
+	req := &ExecutionRequest{}
+	decoded, err := tryDecodeJSON(r, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode execution request: %w", err)
+	}
+	if !decoded {
+		return &ExecutionRequest{}, nil
+	}
+	return req, nil
+}
+
+// DecodeExecutionRequestWithContext parses an ExecutionRequest with context support.
+// If the context is cancelled, it returns the context error.
+func DecodeExecutionRequestWithContext(ctx context.Context, r io.Reader) (*ExecutionRequest, error) {
+	req := &ExecutionRequest{}
+	decoded, err := tryDecodeJSONWithContext(ctx, r, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode execution request: %w", err)
+	}
+	if !decoded {
+		return &ExecutionRequest{}, nil
+	}
+	return req, nil
+}
+
+func tryDecodeJSON(r io.Reader, v interface{}) (bool, error) {
+	decoder := json.NewDecoder(r)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(v); err != nil {
+		if err.Error() != "unexpected EOF" {
+			return false, err
+		}
+		return false, nil
+	}
+	return true, nil
+}
+
+func tryDecodeJSONWithContext(ctx context.Context, r io.Reader, v interface{}) (bool, error) {
+	type result struct {
+		ok  bool
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		decoder := json.NewDecoder(r)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(v); err != nil {
+			errStr := err.Error()
+			if strings.Contains(errStr, "unexpected EOF") {
+				ch <- result{ok: false}
+			} else {
+				ch <- result{ok: false, err: err}
+			}
+		} else {
+			ch <- result{ok: true}
+		}
+	}()
+	select {
+	case res := <-ch:
+		return res.ok, res.err
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
 }
 
 // ExecutionResult represents the result of a code execution.

@@ -8,7 +8,8 @@ WORKDIR /app
 # 复制所有源代码（本项目仅用标准库，无需 go mod download）
 COPY . .
 
-# 预编译验证
+# 预编译验证（禁用 CGO 以支持跨架构构建）
+ENV CGO_ENABLED=0
 RUN go build ./...
 
 # 默认启动命令

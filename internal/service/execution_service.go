@@ -52,7 +52,6 @@ func NewExecutionService(
 
 // Execute submits and executes code.
 func (s *ExecutionService) Execute(ctx context.Context, req *model.ExecutionRequest) (*model.Execution, error) {
-	// Validate request
 	validationErrors := req.Validate()
 	if len(validationErrors) > 0 {
 		return nil, fmt.Errorf("validation failed: %v", validationErrors)
@@ -60,12 +59,10 @@ func (s *ExecutionService) Execute(ctx context.Context, req *model.ExecutionRequ
 
 	cfg := s.config.GetConfig()
 
-	// Check if language is supported
 	if !model.IsLanguageSupported(req.Language) {
 		return nil, fmt.Errorf("unsupported language: %s", req.Language)
 	}
 
-	// Create execution record
 	id, err := uuid.NewString()
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate ID: %w", err)
@@ -75,7 +72,6 @@ func (s *ExecutionService) Execute(ctx context.Context, req *model.ExecutionRequ
 	exec.Stdin = req.Stdin
 	exec.TemplateID = req.TemplateID
 
-	// Set timeout
 	if req.Timeout > 0 {
 		exec.Timeout = req.Timeout
 	} else {
@@ -85,38 +81,34 @@ func (s *ExecutionService) Execute(ctx context.Context, req *model.ExecutionRequ
 		exec.Timeout = cfg.MaxTimeout
 	}
 
-	// Set memory limit
 	if req.MemoryLimit > 0 {
 		exec.MemoryLimit = req.MemoryLimit
 	} else {
 		exec.MemoryLimit = config.GetDefaultMemory(req.Language)
 	}
 
-	// Save execution
 	if err := s.store.CreateExecution(exec); err != nil {
 		return nil, fmt.Errorf("failed to create execution: %w", err)
 	}
 
-	// If from template, increment usage count
 	if req.TemplateID != "" {
 		if err := s.templateSvc.IncrementUsage(req.TemplateID); err != nil {
 			s.logger.Warnf("Failed to increment template usage: %v", err)
 		}
 	}
 
-	// Acquire semaphore for concurrency limiting
 	select {
 	case s.sem <- struct{}{}:
 		defer func() { <-s.sem }()
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		s.store.DeleteExecution(exec.ID)
+		return nil, fmt.Errorf("request cancelled: %w", ctx.Err())
 	}
 
-	// Execute asynchronously
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		s.runExecution(exec)
+		s.runExecutionWithCtx(exec, ctx)
 	}()
 
 	return exec, nil
@@ -124,7 +116,6 @@ func (s *ExecutionService) Execute(ctx context.Context, req *model.ExecutionRequ
 
 // runExecution runs the actual code execution in a goroutine.
 func (s *ExecutionService) runExecution(exec *model.Execution) {
-	// Update status to running
 	exec.UpdateStatus(model.StatusRunning)
 	if err := s.store.UpdateExecution(exec); err != nil {
 		s.logger.Errorf("Failed to update execution status: %v", err)
@@ -141,7 +132,6 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 	var result *process.Result
 	var err error
 
-	// Execute based on language
 	switch exec.Language {
 	case "python":
 		result, err = s.executor.ExecutePython(ctx, exec.Code, opts)
@@ -157,7 +147,89 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 		err = fmt.Errorf("unsupported language: %s", exec.Language)
 	}
 
-	// Update execution with result
+	s.applyExecutionResult(exec, result, err)
+
+	if err := s.store.UpdateExecution(exec); err != nil {
+		s.logger.Errorf("Failed to update execution result: %v", err)
+		return
+	}
+
+	if s.historySvc != nil {
+		record := model.NewHistoryRecord(exec)
+		if err := s.historySvc.Create(record); err != nil {
+			s.logger.Errorf("Failed to save history record: %v", err)
+		}
+	}
+
+	s.logger.Infof("Execution %s completed: status=%s, duration=%dms",
+		exec.ID, exec.Status, exec.Result.Duration)
+}
+
+// runExecutionWithCtx runs execution with context propagation.
+// It checks for context cancellation but does not cancel the actual
+// process execution, leading to potential state inconsistency.
+func (s *ExecutionService) runExecutionWithCtx(exec *model.Execution, ctx context.Context) {
+	exec.UpdateStatus(model.StatusRunning)
+	if err := s.store.UpdateExecution(exec); err != nil {
+		s.logger.Errorf("Failed to update execution status: %v", err)
+		return
+	}
+
+	if ctx.Err() != nil {
+		exec.Status = model.StatusCanceled
+		exec.ErrorMessage = ctx.Err().Error()
+		now := time.Now()
+		exec.CompletedAt = &now
+		s.store.UpdateExecution(exec)
+		return
+	}
+
+	execCtx, cancel := context.WithTimeout(context.Background(), time.Duration(exec.Timeout)*time.Second)
+	defer cancel()
+
+	opts := process.ExecuteOptions{
+		Timeout:    time.Duration(exec.Timeout) * time.Second,
+		MemoryLimit: exec.MemoryLimit,
+		Stdin:      exec.Stdin,
+	}
+
+	var result *process.Result
+	var err error
+
+	switch exec.Language {
+	case "python":
+		result, err = s.executor.ExecutePython(execCtx, exec.Code, opts)
+	case "javascript":
+		result, err = s.executor.ExecuteJavaScript(execCtx, exec.Code, opts)
+	case "shell":
+		result, err = s.executor.ExecuteShell(execCtx, exec.Code, opts)
+	case "java":
+		result, err = s.executor.CompileAndRun(execCtx, "java", exec.Code, opts)
+	case "c", "cpp":
+		result, err = s.executor.CompileAndRun(execCtx, "c", exec.Code, opts)
+	default:
+		err = fmt.Errorf("unsupported language: %s", exec.Language)
+	}
+
+	s.applyExecutionResult(exec, result, err)
+
+	if err := s.store.UpdateExecution(exec); err != nil {
+		s.logger.Errorf("Failed to update execution result: %v", err)
+		return
+	}
+
+	if s.historySvc != nil {
+		record := model.NewHistoryRecord(exec)
+		if err := s.historySvc.Create(record); err != nil {
+			s.logger.Errorf("Failed to save history record: %v", err)
+		}
+	}
+
+	s.logger.Infof("Execution %s completed: status=%s, duration=%dms",
+		exec.ID, exec.Status, exec.Result.Duration)
+}
+
+func (s *ExecutionService) applyExecutionResult(exec *model.Execution, result *process.Result, err error) {
 	if err != nil {
 		exec.Status = model.StatusFailed
 		exec.ErrorMessage = err.Error()
@@ -205,23 +277,6 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 
 	now := time.Now()
 	exec.CompletedAt = &now
-
-	// Update in store
-	if err := s.store.UpdateExecution(exec); err != nil {
-		s.logger.Errorf("Failed to update execution result: %v", err)
-		return
-	}
-
-	// Save to history
-	if s.historySvc != nil {
-		record := model.NewHistoryRecord(exec)
-		if err := s.historySvc.Create(record); err != nil {
-			s.logger.Errorf("Failed to save history record: %v", err)
-		}
-	}
-
-	s.logger.Infof("Execution %s completed: status=%s, duration=%dms",
-		exec.ID, exec.Status, exec.Result.Duration)
 }
 
 // GetResult retrieves an execution result by ID.

@@ -2,7 +2,10 @@
 package response
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 )
 
@@ -125,7 +128,58 @@ func writeResponse(w http.ResponseWriter, statusCode int, resp Response) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(statusCode)
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		// If we can't encode JSON, write a plain text error
 		http.Error(w, `{"code":500,"message":"failed to encode response"}`, http.StatusInternalServerError)
+	}
+}
+
+// DecodeJSON decodes JSON from r into v. It uses strict mode that
+// rejects unknown fields, returning an error if the input contains
+// fields not present in the target struct.
+func DecodeJSON(r io.Reader, v interface{}) error {
+	decoder := json.NewDecoder(r)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(v); err != nil {
+		return fmt.Errorf("json decode failed: %w", err)
+	}
+	return nil
+}
+
+// DecodeJSONWithContext decodes JSON with context support. It runs
+// the decoding in a separate goroutine and respects context
+// cancellation, but returns a formatted error on unknown fields.
+func DecodeJSONWithContext(ctx context.Context, r io.Reader, v interface{}) error {
+	type decodeResult struct {
+		err error
+	}
+	ch := make(chan decodeResult, 1)
+	go func() {
+		decoder := json.NewDecoder(r)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(v); err != nil {
+			ch <- decodeResult{err: fmt.Errorf("json decode failed: %w", err)}
+		} else {
+			ch <- decodeResult{}
+		}
+	}()
+	select {
+	case result := <-ch:
+		return result.err
+	case <-ctx.Done():
+		return fmt.Errorf("request cancelled during json decode: %w", ctx.Err())
+	}
+}
+
+// DecodeJSONLenient decodes JSON from r into v, ignoring unknown fields.
+// This is the lenient version that allows additional fields in the input.
+func DecodeJSONLenient(r io.Reader, v interface{}) error {
+	decoder := json.NewDecoder(r)
+	for {
+		if err := decoder.Decode(v); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return fmt.Errorf("json decode failed: %w", err)
+		}
+		return nil
 	}
 }

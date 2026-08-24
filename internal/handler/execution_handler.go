@@ -2,7 +2,6 @@
 package handler
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -38,26 +37,28 @@ func (h *ExecutionHandler) Execute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req model.ExecutionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.BadRequest(w, fmt.Sprintf("invalid request body: %v", err))
+	if err := response.DecodeJSONWithContext(r.Context(), r.Body, &req); err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "request cancelled") {
+			response.BadRequest(w, errMsg)
+		} else {
+			response.BadRequest(w, fmt.Sprintf("invalid request body: %v", err))
+		}
 		return
 	}
 
-	// Validate request
 	validationErrors := req.Validate()
 	if len(validationErrors) > 0 {
 		response.BadRequest(w, fmt.Sprintf("validation failed: %v", validationErrors))
 		return
 	}
 
-	// Code safety validation
 	safetyResult := h.validator.Validate(req.Code, req.Language)
 	if !safetyResult.Valid {
 		response.BadRequest(w, fmt.Sprintf("code safety check failed: %v", safetyResult.Errors))
 		return
 	}
 
-	// Execute the code
 	exec, err := h.svc.Execute(r.Context(), &req)
 	if err != nil {
 		if strings.Contains(err.Error(), "unsupported language") {
@@ -160,7 +161,7 @@ func (h *ExecutionHandler) BatchExecute(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var reqs []model.ExecutionRequest
-	if err := json.NewDecoder(r.Body).Decode(&reqs); err != nil {
+	if err := response.DecodeJSONWithContext(r.Context(), r.Body, &reqs); err != nil {
 		response.BadRequest(w, fmt.Sprintf("invalid request body: %v", err))
 		return
 	}
