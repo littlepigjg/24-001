@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/codesandbox/codesandbox/pkg/logger"
@@ -17,6 +18,7 @@ type Executor struct {
 	runner  *Runner
 	limiter *Limiter
 	logger  *logger.Logger
+	mu      sync.Mutex
 }
 
 // NewExecutor creates a new Executor.
@@ -52,7 +54,6 @@ func DefaultExecuteOptions() ExecuteOptions {
 
 // ExecutePython executes Python code in a sandboxed environment.
 func (e *Executor) ExecutePython(ctx context.Context, code string, opts ExecuteOptions) (*Result, error) {
-	// Create a temporary file for the code
 	tmpFile, err := os.CreateTemp("", "codesandbox-python-*.py")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp file: %w", err)
@@ -65,30 +66,35 @@ func (e *Executor) ExecutePython(ctx context.Context, code string, opts ExecuteO
 	}
 	tmpFile.Close()
 
-	// Build the command with resource limits
 	cmdName, cmdArgs, err := e.limiter.ApplyLimits(ctx, "python3", []string{tmpFile.Name()})
 	if err != nil {
 		return nil, err
 	}
 
-	// Override workdir if specified
+	e.runner.mu.Lock()
+	savedWorkDir := e.runner.WorkDir
+	savedEnv := e.runner.Env
 	if opts.WorkDir != "" {
 		e.runner.WorkDir = opts.WorkDir
 	} else {
 		e.runner.WorkDir = ""
 	}
-
 	if opts.Env != nil {
 		e.runner.Env = opts.Env
 	}
+	e.runner.mu.Unlock()
 
-	// Execute
 	var result *Result
 	if opts.Stdin != "" {
 		result, err = e.runner.RunWithStdinTimeout(ctx, opts.Stdin, opts.Timeout, cmdName, cmdArgs...)
 	} else {
 		result, err = e.runner.RunWithTimeout(ctx, opts.Timeout, cmdName, cmdArgs...)
 	}
+
+	e.runner.mu.Lock()
+	e.runner.WorkDir = savedWorkDir
+	e.runner.Env = savedEnv
+	e.runner.mu.Unlock()
 
 	return result, err
 }
@@ -112,11 +118,18 @@ func (e *Executor) ExecuteJavaScript(ctx context.Context, code string, opts Exec
 		return nil, err
 	}
 
+	e.runner.mu.Lock()
+	savedWorkDir := e.runner.WorkDir
+	savedEnv := e.runner.Env
 	if opts.WorkDir != "" {
 		e.runner.WorkDir = opts.WorkDir
 	} else {
 		e.runner.WorkDir = ""
 	}
+	if opts.Env != nil {
+		e.runner.Env = opts.Env
+	}
+	e.runner.mu.Unlock()
 
 	var result *Result
 	if opts.Stdin != "" {
@@ -124,6 +137,11 @@ func (e *Executor) ExecuteJavaScript(ctx context.Context, code string, opts Exec
 	} else {
 		result, err = e.runner.RunWithTimeout(ctx, opts.Timeout, cmdName, cmdArgs...)
 	}
+
+	e.runner.mu.Lock()
+	e.runner.WorkDir = savedWorkDir
+	e.runner.Env = savedEnv
+	e.runner.mu.Unlock()
 
 	return result, err
 }
@@ -142,7 +160,6 @@ func (e *Executor) ExecuteShell(ctx context.Context, code string, opts ExecuteOp
 	}
 	tmpFile.Close()
 
-	// Make executable
 	if err := os.Chmod(tmpFile.Name(), 0755); err != nil {
 		return nil, fmt.Errorf("failed to make temp file executable: %w", err)
 	}
@@ -152,11 +169,18 @@ func (e *Executor) ExecuteShell(ctx context.Context, code string, opts ExecuteOp
 		return nil, err
 	}
 
+	e.runner.mu.Lock()
+	savedWorkDir := e.runner.WorkDir
+	savedEnv := e.runner.Env
 	if opts.WorkDir != "" {
 		e.runner.WorkDir = opts.WorkDir
 	} else {
 		e.runner.WorkDir = ""
 	}
+	if opts.Env != nil {
+		e.runner.Env = opts.Env
+	}
+	e.runner.mu.Unlock()
 
 	var result *Result
 	if opts.Stdin != "" {
@@ -164,6 +188,11 @@ func (e *Executor) ExecuteShell(ctx context.Context, code string, opts ExecuteOp
 	} else {
 		result, err = e.runner.RunWithTimeout(ctx, opts.Timeout, cmdName, cmdArgs...)
 	}
+
+	e.runner.mu.Lock()
+	e.runner.WorkDir = savedWorkDir
+	e.runner.Env = savedEnv
+	e.runner.mu.Unlock()
 
 	return result, err
 }
@@ -178,11 +207,18 @@ func (e *Executor) ExecuteCommand(ctx context.Context, cmdName string, args []st
 		return nil, err
 	}
 
+	e.runner.mu.Lock()
+	savedWorkDir := e.runner.WorkDir
+	savedEnv := e.runner.Env
 	if opts.WorkDir != "" {
 		e.runner.WorkDir = opts.WorkDir
 	} else {
 		e.runner.WorkDir = ""
 	}
+	if opts.Env != nil {
+		e.runner.Env = opts.Env
+	}
+	e.runner.mu.Unlock()
 
 	var result *Result
 	if opts.Stdin != "" {
@@ -190,6 +226,11 @@ func (e *Executor) ExecuteCommand(ctx context.Context, cmdName string, args []st
 	} else {
 		result, err = e.runner.RunWithTimeout(ctx, opts.Timeout, limitedCmd, limitedArgs...)
 	}
+
+	e.runner.mu.Lock()
+	e.runner.WorkDir = savedWorkDir
+	e.runner.Env = savedEnv
+	e.runner.mu.Unlock()
 
 	return result, err
 }
@@ -239,26 +280,22 @@ func (e *Executor) CompileAndRun(ctx context.Context, lang string, code string, 
 
 // executeJava compiles and runs Java code.
 func (e *Executor) executeJava(ctx context.Context, code string, opts ExecuteOptions) (*Result, error) {
-	// Create a temporary directory for Java files
 	tmpDir, err := os.MkdirTemp("", "codesandbox-java-*")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Find the main class name from the code
 	className := extractClassName(code)
 	if className == "" {
 		className = "Main"
 	}
 
-	// Write Java file
 	javaFile := filepath.Join(tmpDir, className+".java")
 	if err := os.WriteFile(javaFile, []byte(code), 0644); err != nil {
 		return nil, fmt.Errorf("failed to write java file: %w", err)
 	}
 
-	// Compile
 	compileResult, err := e.runner.RunWithTimeout(ctx, 10*time.Second, "javac", javaFile)
 	if err != nil {
 		return compileResult, err
@@ -267,7 +304,6 @@ func (e *Executor) executeJava(ctx context.Context, code string, opts ExecuteOpt
 		return compileResult, nil
 	}
 
-	// Run
 	if opts.WorkDir == "" {
 		opts.WorkDir = tmpDir
 	}
@@ -276,10 +312,16 @@ func (e *Executor) executeJava(ctx context.Context, code string, opts ExecuteOpt
 		return nil, err
 	}
 
+	e.runner.mu.Lock()
+	savedWorkDir := e.runner.WorkDir
+	savedEnv := e.runner.Env
 	e.runner.WorkDir = opts.WorkDir
 	if opts.Env != nil {
 		e.runner.Env = opts.Env
+	} else {
+		e.runner.Env = nil
 	}
+	e.runner.mu.Unlock()
 
 	var result *Result
 	if opts.Stdin != "" {
@@ -287,6 +329,11 @@ func (e *Executor) executeJava(ctx context.Context, code string, opts ExecuteOpt
 	} else {
 		result, err = e.runner.RunWithTimeout(ctx, opts.Timeout, cmdName, cmdArgs...)
 	}
+
+	e.runner.mu.Lock()
+	e.runner.WorkDir = savedWorkDir
+	e.runner.Env = savedEnv
+	e.runner.mu.Unlock()
 
 	return result, err
 }
@@ -306,7 +353,6 @@ func (e *Executor) executeC(ctx context.Context, code string, opts ExecuteOption
 
 	binFile := filepath.Join(tmpDir, "a.out")
 
-	// Compile
 	compileResult, err := e.runner.RunWithTimeout(ctx, 10*time.Second, "gcc", "-o", binFile, srcFile)
 	if err != nil {
 		return compileResult, err
@@ -315,7 +361,6 @@ func (e *Executor) executeC(ctx context.Context, code string, opts ExecuteOption
 		return compileResult, nil
 	}
 
-	// Run
 	if opts.WorkDir == "" {
 		opts.WorkDir = tmpDir
 	}
@@ -325,10 +370,16 @@ func (e *Executor) executeC(ctx context.Context, code string, opts ExecuteOption
 		return nil, err
 	}
 
+	e.runner.mu.Lock()
+	savedWorkDir := e.runner.WorkDir
+	savedEnv := e.runner.Env
 	e.runner.WorkDir = opts.WorkDir
 	if opts.Env != nil {
 		e.runner.Env = opts.Env
+	} else {
+		e.runner.Env = nil
 	}
+	e.runner.mu.Unlock()
 
 	var result *Result
 	if opts.Stdin != "" {
@@ -336,6 +387,11 @@ func (e *Executor) executeC(ctx context.Context, code string, opts ExecuteOption
 	} else {
 		result, err = e.runner.RunWithTimeout(ctx, opts.Timeout, cmdName, cmdArgs...)
 	}
+
+	e.runner.mu.Lock()
+	e.runner.WorkDir = savedWorkDir
+	e.runner.Env = savedEnv
+	e.runner.mu.Unlock()
 
 	return result, err
 }

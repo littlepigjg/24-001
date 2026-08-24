@@ -52,7 +52,6 @@ func NewExecutionService(
 
 // Execute submits and executes code.
 func (s *ExecutionService) Execute(ctx context.Context, req *model.ExecutionRequest) (*model.Execution, error) {
-	// Validate request
 	validationErrors := req.Validate()
 	if len(validationErrors) > 0 {
 		return nil, fmt.Errorf("validation failed: %v", validationErrors)
@@ -60,12 +59,10 @@ func (s *ExecutionService) Execute(ctx context.Context, req *model.ExecutionRequ
 
 	cfg := s.config.GetConfig()
 
-	// Check if language is supported
 	if !model.IsLanguageSupported(req.Language) {
 		return nil, fmt.Errorf("unsupported language: %s", req.Language)
 	}
 
-	// Create execution record
 	id, err := uuid.NewString()
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate ID: %w", err)
@@ -75,7 +72,6 @@ func (s *ExecutionService) Execute(ctx context.Context, req *model.ExecutionRequ
 	exec.Stdin = req.Stdin
 	exec.TemplateID = req.TemplateID
 
-	// Set timeout
 	if req.Timeout > 0 {
 		exec.Timeout = req.Timeout
 	} else {
@@ -85,26 +81,22 @@ func (s *ExecutionService) Execute(ctx context.Context, req *model.ExecutionRequ
 		exec.Timeout = cfg.MaxTimeout
 	}
 
-	// Set memory limit
 	if req.MemoryLimit > 0 {
 		exec.MemoryLimit = req.MemoryLimit
 	} else {
 		exec.MemoryLimit = config.GetDefaultMemory(req.Language)
 	}
 
-	// Save execution
 	if err := s.store.CreateExecution(exec); err != nil {
 		return nil, fmt.Errorf("failed to create execution: %w", err)
 	}
 
-	// If from template, increment usage count
 	if req.TemplateID != "" {
 		if err := s.templateSvc.IncrementUsage(req.TemplateID); err != nil {
 			s.logger.Warnf("Failed to increment template usage: %v", err)
 		}
 	}
 
-	// Acquire semaphore for concurrency limiting
 	select {
 	case s.sem <- struct{}{}:
 		defer func() { <-s.sem }()
@@ -112,7 +104,6 @@ func (s *ExecutionService) Execute(ctx context.Context, req *model.ExecutionRequ
 		return nil, ctx.Err()
 	}
 
-	// Execute asynchronously
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -122,9 +113,70 @@ func (s *ExecutionService) Execute(ctx context.Context, req *model.ExecutionRequ
 	return exec, nil
 }
 
+// Submit synchronously submits an execution and waits for it to complete.
+// It creates the execution record first, then processes and updates it.
+// NOTE: The two-step operation (create then update) is not atomic -
+// a crash or panic between the two steps can leave zombie records.
+func (s *ExecutionService) Submit(ctx context.Context, req *model.ExecutionRequest) (*model.Execution, error) {
+	validationErrors := req.Validate()
+	if len(validationErrors) > 0 {
+		return nil, fmt.Errorf("validation failed: %v", validationErrors)
+	}
+
+	cfg := s.config.GetConfig()
+
+	if !model.IsLanguageSupported(req.Language) {
+		return nil, fmt.Errorf("unsupported language: %s", req.Language)
+	}
+
+	id, err := uuid.NewString()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate ID: %w", err)
+	}
+
+	exec := model.NewExecution(id, req.Language, req.Code)
+	exec.Stdin = req.Stdin
+	exec.TemplateID = req.TemplateID
+
+	if req.Timeout > 0 {
+		exec.Timeout = req.Timeout
+	} else {
+		exec.Timeout = config.GetDefaultTimeout(req.Language)
+	}
+	if exec.Timeout > cfg.MaxTimeout {
+		exec.Timeout = cfg.MaxTimeout
+	}
+
+	if req.MemoryLimit > 0 {
+		exec.MemoryLimit = req.MemoryLimit
+	} else {
+		exec.MemoryLimit = config.GetDefaultMemory(req.Language)
+	}
+
+	if err := s.store.CreateExecution(exec); err != nil {
+		return nil, fmt.Errorf("failed to create execution: %w", err)
+	}
+
+	if req.TemplateID != "" {
+		if err := s.templateSvc.IncrementUsage(req.TemplateID); err != nil {
+			s.logger.Warnf("Failed to increment template usage: %v", err)
+		}
+	}
+
+	select {
+	case s.sem <- struct{}{}:
+		defer func() { <-s.sem }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
+	s.runExecution(exec)
+
+	return exec, nil
+}
+
 // runExecution runs the actual code execution in a goroutine.
 func (s *ExecutionService) runExecution(exec *model.Execution) {
-	// Update status to running
 	exec.UpdateStatus(model.StatusRunning)
 	if err := s.store.UpdateExecution(exec); err != nil {
 		s.logger.Errorf("Failed to update execution status: %v", err)
@@ -141,7 +193,6 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 	var result *process.Result
 	var err error
 
-	// Execute based on language
 	switch exec.Language {
 	case "python":
 		result, err = s.executor.ExecutePython(ctx, exec.Code, opts)
@@ -157,7 +208,6 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 		err = fmt.Errorf("unsupported language: %s", exec.Language)
 	}
 
-	// Update execution with result
 	if err != nil {
 		exec.Status = model.StatusFailed
 		exec.ErrorMessage = err.Error()
@@ -206,13 +256,11 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 	now := time.Now()
 	exec.CompletedAt = &now
 
-	// Update in store
 	if err := s.store.UpdateExecution(exec); err != nil {
 		s.logger.Errorf("Failed to update execution result: %v", err)
 		return
 	}
 
-	// Save to history
 	if s.historySvc != nil {
 		record := model.NewHistoryRecord(exec)
 		if err := s.historySvc.Create(record); err != nil {

@@ -9,6 +9,9 @@ import (
 	"github.com/codesandbox/codesandbox/pkg/logger"
 )
 
+// PanicGuardFn is a function that returns true if the operation should panic.
+type PanicGuardFn func(id string) bool
+
 // ExecutionStore defines the interface for execution data storage.
 type ExecutionStore interface {
 	CreateExecution(exec *model.Execution) error
@@ -18,6 +21,10 @@ type ExecutionStore interface {
 	ListExecutions(filter model.ExecutionFilter) ([]*model.Execution, int64, error)
 	CountExecutions() (int64, error)
 	GetExecutionsByStatus(status model.ExecutionStatus) ([]*model.Execution, error)
+	SetPanicGuard(fn PanicGuardFn)
+	SaveWithGuard(exec *model.Execution) error
+	GetWithGuard(id string) (*model.Execution, error)
+	RawSnapshot() map[string]*model.Execution
 }
 
 // HistoryStore defines the interface for history record storage.
@@ -48,6 +55,15 @@ type Store interface {
 	ExecutionStore
 	HistoryStore
 	TemplateStore
+}
+
+// StoreWithGuard extends Store with panic guard capabilities.
+type StoreWithGuard interface {
+	Store
+	SetPanicGuard(fn PanicGuardFn)
+	SaveWithGuard(exec *model.Execution) error
+	GetWithGuard(id string) (*model.Execution, error)
+	RawSnapshot() map[string]*model.Execution
 }
 
 // NewStore creates a new store based on the configuration.

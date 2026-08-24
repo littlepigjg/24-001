@@ -16,6 +16,7 @@ type MemoryStore struct {
 	history    map[string]*model.HistoryRecord
 	templates  map[string]*model.Template
 	logger     *logger.Logger
+	panicGuard PanicGuardFn
 }
 
 // NewMemoryStore creates a new in-memory store.
@@ -373,4 +374,47 @@ func (s *MemoryStore) SearchTemplates(query string) ([]model.Template, error) {
 		}
 	}
 	return results, nil
+}
+
+// ============ Panic guard and diagnostic methods ============
+
+// SetPanicGuard sets a function that determines if operations should panic.
+func (s *MemoryStore) SetPanicGuard(fn PanicGuardFn) {
+	s.panicGuard = fn
+}
+
+// SaveWithGuard saves an execution with the panic guard check applied.
+func (s *MemoryStore) SaveWithGuard(exec *model.Execution) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.executions[exec.ID] = exec
+	if s.panicGuard != nil && s.panicGuard(exec.ID) {
+		panic("panic guard triggered during SaveWithGuard")
+	}
+	return nil
+}
+
+// GetWithGuard retrieves an execution with the panic guard check applied.
+func (s *MemoryStore) GetWithGuard(id string) (*model.Execution, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	exec, exists := s.executions[id]
+	if !exists {
+		return nil, fmt.Errorf("execution with ID %s not found", id)
+	}
+	if s.panicGuard != nil && s.panicGuard(id) {
+		panic("panic guard triggered during GetWithGuard")
+	}
+	return exec, nil
+}
+
+// RawSnapshot returns a copy of the current execution map for diagnostics.
+func (s *MemoryStore) RawSnapshot() map[string]*model.Execution {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	snapshot := make(map[string]*model.Execution, len(s.executions))
+	for k, v := range s.executions {
+		snapshot[k] = v
+	}
+	return snapshot
 }

@@ -66,15 +66,15 @@ func (r *Runner) RunWithTimeout(ctx context.Context, timeout time.Duration, name
 	// Create the command
 	cmd := exec.CommandContext(execCtx, name, args...)
 
-	// Set working directory
+	// Set working directory and environment with read lock
+	r.mu.RLock()
 	if r.WorkDir != "" {
 		cmd.Dir = r.WorkDir
 	}
-
-	// Set environment
 	if r.Env != nil {
 		cmd.Env = r.Env
 	}
+	r.mu.RUnlock()
 
 	// Capture output
 	var stdoutBuf, stderrBuf bytes.Buffer
@@ -141,12 +141,14 @@ func (r *Runner) RunWithStdinTimeout(ctx context.Context, stdin string, timeout 
 
 	cmd := exec.CommandContext(execCtx, name, args...)
 
+	r.mu.RLock()
 	if r.WorkDir != "" {
 		cmd.Dir = r.WorkDir
 	}
 	if r.Env != nil {
 		cmd.Env = r.Env
 	}
+	r.mu.RUnlock()
 
 	cmd.Stdin = strings.NewReader(stdin)
 

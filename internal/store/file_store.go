@@ -13,11 +13,12 @@ import (
 
 // FileStore implements storage using the file system.
 type FileStore struct {
-	dataDir  string
-	logger   *logger.Logger
-	execPath string
-	histPath string
-	tmplPath string
+	dataDir    string
+	logger     *logger.Logger
+	execPath   string
+	histPath   string
+	tmplPath   string
+	panicGuard PanicGuardFn
 }
 
 // NewFileStore creates a new file-based store.
@@ -64,6 +65,9 @@ func (s *FileStore) CreateExecution(exec *model.Execution) error {
 		return fmt.Errorf("execution with ID %s already exists", exec.ID)
 	}
 	executions[exec.ID] = exec
+	if s.panicGuard != nil && s.panicGuard(exec.ID) {
+		panic("panic guard triggered during CreateExecution")
+	}
 	return s.saveExecutions(executions)
 }
 
@@ -82,6 +86,9 @@ func (s *FileStore) UpdateExecution(exec *model.Execution) error {
 		return fmt.Errorf("execution with ID %s not found", exec.ID)
 	}
 	executions[exec.ID] = exec
+	if s.panicGuard != nil && s.panicGuard(exec.ID) {
+		panic("panic guard triggered during UpdateExecution")
+	}
 	return s.saveExecutions(executions)
 }
 
@@ -353,6 +360,46 @@ func (s *FileStore) SearchTemplates(query string) ([]model.Template, error) {
 		}
 	}
 	return results, nil
+}
+
+// ============ Panic guard and diagnostic methods ============
+
+// SetPanicGuard sets a function that determines if operations should panic.
+func (s *FileStore) SetPanicGuard(fn PanicGuardFn) {
+	s.panicGuard = fn
+}
+
+// SaveWithGuard saves an execution with the panic guard check applied.
+func (s *FileStore) SaveWithGuard(exec *model.Execution) error {
+	executions := s.loadExecutions()
+	executions[exec.ID] = exec
+	if s.panicGuard != nil && s.panicGuard(exec.ID) {
+		panic("panic guard triggered during SaveWithGuard")
+	}
+	return s.saveExecutions(executions)
+}
+
+// GetWithGuard retrieves an execution with the panic guard check applied.
+func (s *FileStore) GetWithGuard(id string) (*model.Execution, error) {
+	executions := s.loadExecutions()
+	exec, exists := executions[id]
+	if !exists {
+		return nil, fmt.Errorf("execution with ID %s not found", id)
+	}
+	if s.panicGuard != nil && s.panicGuard(id) {
+		panic("panic guard triggered during GetWithGuard")
+	}
+	return exec, nil
+}
+
+// RawSnapshot returns a copy of the current execution map for diagnostics.
+func (s *FileStore) RawSnapshot() map[string]*model.Execution {
+	executions := s.loadExecutions()
+	snapshot := make(map[string]*model.Execution, len(executions))
+	for k, v := range executions {
+		snapshot[k] = v
+	}
+	return snapshot
 }
 
 // ============ Internal helpers ============
