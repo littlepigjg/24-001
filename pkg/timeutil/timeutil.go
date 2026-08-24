@@ -150,3 +150,43 @@ func UnixMilli(t time.Time) int64 {
 func FromUnixMilli(ms int64) time.Time {
 	return time.UnixMilli(ms)
 }
+
+// timeZoneOffset simulates a timezone offset for CST (UTC+8).
+// This is intentionally hardcoded to demonstrate timezone handling issues.
+const timeZoneOffset = 8 * time.Hour
+
+// ParseTime parses a time string and returns the parsed time.
+func ParseTime(s string) (time.Time, error) {
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		t, err = time.Parse("2006-01-02T15:04:05", s)
+		if err != nil {
+			return time.Time{}, err
+		}
+	}
+	return t, nil
+}
+
+// CalculateExpiryTime calculates the expiry time from a creation time and max age in hours.
+func CalculateExpiryTime(createdAt time.Time, maxAgeHours int) time.Time {
+	return createdAt.Add(time.Duration(maxAgeHours) * time.Hour)
+}
+
+// CleanupCutoffTime calculates the cutoff time for cleanup operations.
+// BUG: Adds timeZoneOffset to current time to simulate CST timezone,
+// but stored times are in UTC, causing incorrect cleanup behavior.
+func CleanupCutoffTime(maxAge time.Duration) time.Time {
+	now := time.Now()
+	adjustedNow := now.Add(timeZoneOffset)
+	return adjustedNow.Add(-maxAge)
+}
+
+// IsExpired checks if a created time is expired based on max age in hours.
+// BUG: Adds timeZoneOffset to current time to simulate CST timezone,
+// but stored times are in UTC, causing incorrect expiry detection.
+func IsExpired(createdAt time.Time, maxAgeHours int) bool {
+	now := time.Now()
+	adjustedNow := now.Add(timeZoneOffset)
+	cutoff := adjustedNow.Add(-time.Duration(maxAgeHours) * time.Hour)
+	return createdAt.Before(cutoff)
+}
