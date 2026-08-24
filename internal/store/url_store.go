@@ -106,6 +106,10 @@ func (s *URLStore) Save(u *model.ShortURL, overwrite bool) error {
 		return fmt.Errorf("short url is nil")
 	}
 
+	if err := validateCodeForPath(u.Code); err != nil {
+		return fmt.Errorf("save rejected: %w", err)
+	}
+
 	if !overwrite {
 		if _, exists := s.urls[u.Code]; exists {
 			return fmt.Errorf("url with code %s already exists", u.Code)
@@ -139,6 +143,10 @@ func (s *URLStore) Get(code string) (*model.ShortURL, error) {
 
 	if exists {
 		return &url, nil
+	}
+
+	if err := validateCodeForPath(code); err != nil {
+		return nil, fmt.Errorf("get rejected: %w", err)
 	}
 
 	path := s.buildURLPath(code)
@@ -176,7 +184,11 @@ func (s *URLStore) buildURLPath(code string) string {
 	if base == "" {
 		base = "./data/urls"
 	}
-	return filepath.Join(base, code+".json")
+	// Belt-and-suspenders: callers must have validated `code` already, but
+	// strip any traversal sequences before joining so a bad code can never
+	// escape `base` on the filesystem.
+	safe := sanitizeCode(code)
+	return filepath.Join(base, safe+".json")
 }
 
 type AccessLogStore struct {
@@ -317,4 +329,20 @@ func sanitizeCode(code string) string {
 	code = strings.ReplaceAll(code, "\\", "")
 	code = strings.ReplaceAll(code, "\x00", "")
 	return code
+}
+
+// validateCodeForPath rejects any code whose sanitized form differs from the
+// original — i.e. one containing "/", "\", "..", "\x00" or surrounding
+// whitespace. Such sequences would let a crafted code escape the data
+// directory via filepath.Join, so they must be rejected (not silently
+// rewritten) at the store boundary. This is the last line of defense behind
+// the request and service-layer checks.
+func validateCodeForPath(code string) error {
+	if code == "" {
+		return fmt.Errorf("url code is empty")
+	}
+	if sanitizeCode(code) != code {
+		return fmt.Errorf("invalid url code: contains path separators or dot sequences")
+	}
+	return nil
 }
