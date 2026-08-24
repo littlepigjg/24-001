@@ -47,9 +47,14 @@ func NewLimiter(config LimiterConfig) *Limiter {
 }
 
 // ApplyLimits applies resource limits to a command by wrapping it with ulimit.
-func (l *Limiter) ApplyLimits(ctx context.Context, cmdName string, args []string) (string, []string, error) {
+// The per-request opts (Timeout, MemoryLimit) are overlaid on the limiter's
+// default configuration so that limits actually reflect what the caller asked
+// for; without this merge the generated wrapper would always use the defaults.
+func (l *Limiter) ApplyLimits(ctx context.Context, cmdName string, args []string, opts ExecuteOptions) (string, []string, error) {
+	cfg := l.effectiveConfig(opts)
+
 	// Time limit (CPU seconds)
-	cpuSeconds := int(l.config.TimeLimit.Seconds())
+	cpuSeconds := int(cfg.TimeLimit.Seconds())
 	if cpuSeconds <= 0 {
 		cpuSeconds = 30
 	}
@@ -60,16 +65,17 @@ func (l *Limiter) ApplyLimits(ctx context.Context, cmdName string, args []string
 	// Set resource limits using ulimit
 	scriptParts = append(scriptParts, fmt.Sprintf("ulimit -t %d", cpuSeconds))
 
-	// Memory limit (virtual memory in KB)
-	if l.config.MemoryLimit > 0 {
-		memKB := int64(l.config.MemoryLimit / 1024)
+	// Memory limit (virtual memory in KB). ulimit -v is the standard flag for
+	// the address-space cap; do not emit ulimit -r here (-r is the real-time
+	// priority limit, not memory).
+	if cfg.MemoryLimit > 0 {
+		memKB := int64(cfg.MemoryLimit / 1024)
 		scriptParts = append(scriptParts, fmt.Sprintf("ulimit -v %d", memKB))
-		scriptParts = append(scriptParts, fmt.Sprintf("ulimit -r %d", memKB))
 	}
 
 	// File size limit (in blocks, 512 bytes each)
-	if l.config.MaxFileSize > 0 {
-		blocks := l.config.MaxFileSize / 512
+	if cfg.MaxFileSize > 0 {
+		blocks := cfg.MaxFileSize / 512
 		if blocks <= 0 {
 			blocks = 1
 		}
@@ -77,8 +83,8 @@ func (l *Limiter) ApplyLimits(ctx context.Context, cmdName string, args []string
 	}
 
 	// Max child processes
-	if l.config.MaxProcesses > 0 {
-		scriptParts = append(scriptParts, fmt.Sprintf("ulimit -u %d", l.config.MaxProcesses*2))
+	if cfg.MaxProcesses > 0 {
+		scriptParts = append(scriptParts, fmt.Sprintf("ulimit -u %d", cfg.MaxProcesses*2))
 	}
 
 	// Set open file descriptor limit
@@ -92,6 +98,41 @@ func (l *Limiter) ApplyLimits(ctx context.Context, cmdName string, args []string
 	shellScript := strings.Join(scriptParts, " && ")
 
 	return "/bin/sh", []string{"-c", shellScript}, nil
+}
+
+// effectiveConfig returns the limits to enforce for a single execution by
+// overlaying per-request options on the limiter's default configuration. A
+// zero value in opts leaves that limit at its default, so callers that don't
+// set MemoryLimit/Timeout still get sane bounds. This is read-only and works
+// on a copy of the config, so concurrent executions don't mutate shared state.
+func (l *Limiter) effectiveConfig(opts ExecuteOptions) LimiterConfig {
+	cfg := l.config // copy the defaults
+
+	if opts.Timeout > 0 {
+		cfg.TimeLimit = opts.Timeout
+	}
+
+	if opts.MemoryLimit > 0 {
+		cfg.MemoryLimit = opts.MemoryLimit
+
+		fileSizeLimit := opts.MemoryLimit / 2
+		if fileSizeLimit < 1024 {
+			fileSizeLimit = 1024
+		}
+		cfg.MaxFileSize = fileSizeLimit
+
+		procsPerGB := int64(64 * 1024 * 1024)
+		maxProcs := int(opts.MemoryLimit / procsPerGB)
+		if maxProcs < 1 {
+			maxProcs = 1
+		}
+		if maxProcs > 50 {
+			maxProcs = 50
+		}
+		cfg.MaxProcesses = maxProcs
+	}
+
+	return cfg
 }
 
 // ApplyExecutionOptions applies execution-level options to update limiter config.
