@@ -50,13 +50,13 @@ func (h *ExecutionHandler) Execute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Code safety validation
-	if len(req.Code) > 0 {
-		safetyResult := h.validator.Validate(req.Code, req.Language)
-		if !safetyResult.Valid {
-			response.BadRequest(w, fmt.Sprintf("code safety check failed: %v", safetyResult.Errors))
-			return
-		}
+	// Code safety validation. Always run, even on empty code, so an
+	// empty submission returns an explicit error instead of a hollow
+	// "completed" result with no output.
+	safetyResult := h.validator.Validate(req.Code, req.Language)
+	if !safetyResult.Valid {
+		response.BadRequest(w, fmt.Sprintf("code safety check failed: %v", safetyResult.Errors))
+		return
 	}
 
 	// Execute the code
