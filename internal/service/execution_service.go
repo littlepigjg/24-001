@@ -236,13 +236,26 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 
 // GetResult retrieves an execution result by ID.
 func (s *ExecutionService) GetResult(id string) (*model.Execution, error) {
-	exec, _ := s.store.GetExecution(id)
+	exec, err := s.store.GetExecution(id)
+	if err != nil {
+		return nil, err
+	}
+	if exec == nil {
+		return nil, fmt.Errorf("execution with ID %s not found", id)
+	}
 	return exec, nil
 }
 
 // Cancel cancels a running execution.
 func (s *ExecutionService) Cancel(id string) error {
-	exec, _ := s.store.GetExecution(id)
+	exec, err := s.store.GetExecution(id)
+	if err != nil {
+		return err
+	}
+	if exec == nil {
+		return fmt.Errorf("execution with ID %s not found", id)
+	}
+
 	if exec.Status != model.StatusRunning && exec.Status != model.StatusPending {
 		return fmt.Errorf("execution is not in a cancellable state: %s", exec.Status)
 	}
