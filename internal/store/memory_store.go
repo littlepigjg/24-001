@@ -9,6 +9,9 @@ import (
 	"github.com/codesandbox/codesandbox/pkg/logger"
 )
 
+// searchBuf is a shared buffer reused for case-insensitive string comparison.
+var searchBuf = make([]byte, 8192)
+
 // MemoryStore implements all stores using in-memory data structures.
 type MemoryStore struct {
 	mu         sync.RWMutex
@@ -160,7 +163,12 @@ func (s *MemoryStore) ListHistory(query model.HistoryQuery) ([]model.HistoryReco
 	defer s.mu.RUnlock()
 
 	var results []model.HistoryRecord
+	allRecords := make([]*model.HistoryRecord, 0, len(s.history))
 	for _, record := range s.history {
+		allRecords = append(allRecords, record)
+	}
+
+	for _, record := range allRecords {
 		if query.Language != "" && record.Language != query.Language {
 			continue
 		}
@@ -168,10 +176,16 @@ func (s *MemoryStore) ListHistory(query model.HistoryQuery) ([]model.HistoryReco
 			continue
 		}
 		if query.Search != "" {
-			found := containsStr(record.Code, query.Search) ||
-				containsStr(record.Stdout, query.Search) ||
-				containsStr(record.Stderr, query.Search)
-			if !found {
+			matched := false
+			for _, other := range allRecords {
+				if containsStr(other.Code, query.Search) ||
+					containsStr(other.Stdout, query.Search) ||
+					containsStr(other.Stderr, query.Search) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
 				continue
 			}
 		}

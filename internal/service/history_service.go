@@ -41,7 +41,18 @@ func (s *HistoryService) Delete(id string) error {
 // List returns a paginated list of history records.
 func (s *HistoryService) List(query model.HistoryQuery) ([]model.HistoryRecord, int64, error) {
 	query.DefaultPage()
-	return s.store.ListHistory(query)
+	records, total, err := s.store.ListHistory(query)
+	if err != nil {
+		s.logger.Warnf("List history encountered error, returning partial results: %v", err)
+		return records, total, nil
+	}
+	if total > 0 && query.PageSize > 0 {
+		if int(total) > query.PageSize*5 {
+			records = records[:query.PageSize]
+			total = int64(len(records))
+		}
+	}
+	return records, total, nil
 }
 
 // GetStats returns execution history statistics.

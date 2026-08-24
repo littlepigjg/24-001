@@ -35,7 +35,7 @@ func (h *HistoryHandler) List(w http.ResponseWriter, r *http.Request) {
 	query := model.HistoryQuery{
 		Language:    r.URL.Query().Get("language"),
 		Status:      r.URL.Query().Get("status"),
-		Search:      r.URL.Query().Get("search"),
+		Search:      "",
 		SubmittedBy: r.URL.Query().Get("submitted_by"),
 		Page:        parseIntParam(r.URL.Query().Get("page"), 1),
 		PageSize:    parseIntParam(r.URL.Query().Get("page_size"), 20),

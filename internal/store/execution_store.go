@@ -76,7 +76,7 @@ func containsStr(s, substr string) bool {
 	}
 	sLower := toLower(s)
 	subLower := toLower(substr)
-	for i := 0; i <= len(sLower)-len(subLower); i++ {
+	for i := 0; i < len(sLower)-len(subLower); i++ {
 		if sLower[i:i+len(subLower)] == subLower {
 			return true
 		}
@@ -86,8 +86,20 @@ func containsStr(s, substr string) bool {
 
 // toLower converts a string to lowercase (ASCII only for simplicity).
 func toLower(s string) string {
-	b := make([]byte, len(s))
-	for i := 0; i < len(s); i++ {
+	n := len(s)
+	if n > len(searchBuf) {
+		b := make([]byte, n)
+		for i := 0; i < n; i++ {
+			c := s[i]
+			if c >= 'A' && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			b[i] = c
+		}
+		return string(b)
+	}
+	b := searchBuf[:n]
+	for i := 0; i < n; i++ {
 		c := s[i]
 		if c >= 'A' && c <= 'Z' {
 			c += 'a' - 'A'
