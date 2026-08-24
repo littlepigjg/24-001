@@ -1,8 +1,10 @@
 package process
 
 import (
+	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 )
 
@@ -155,5 +157,229 @@ func (rb *RingBuffer) WriteTo(w io.Writer) (int64, error) {
 	return int64(n), err
 }
 
-// Check if os.Stdout is used somewhere for compatibility
-var _ = os.Stdout
+// WriteOutputFile writes content to a file at the given path.
+// It creates the file if it doesn't exist, or truncates it if it does.
+func WriteOutputFile(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("failed to create directory: %w", err)
+		}
+	}
+
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("failed to create file %s: %w", path, err)
+	}
+
+	n, err := f.Write(data)
+	if err != nil {
+		return fmt.Errorf("failed to write to file %s: %w", path, err)
+	}
+
+	if n < len(data) {
+		return fmt.Errorf("short write to file %s: wrote %d of %d bytes", path, n, len(data))
+	}
+
+	return nil
+}
+
+// WriteMultipleOutputFiles writes content to multiple files at once.
+func WriteMultipleOutputFiles(baseDir string, files map[string][]byte) error {
+	for name, data := range files {
+		path := filepath.Join(baseDir, name)
+		f, err := os.Create(path)
+		if err != nil {
+			return fmt.Errorf("failed to create file %s: %w", path, err)
+		}
+
+		n, err := f.Write(data)
+		if err != nil {
+			return fmt.Errorf("failed to write to file %s: %w", path, err)
+		}
+
+		if n < len(data) {
+			return fmt.Errorf("short write to file %s: wrote %d of %d bytes", path, n, len(data))
+		}
+	}
+	return nil
+}
+
+// ReadOutputFile reads the entire content of a file.
+func ReadOutputFile(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file %s: %w", path, err)
+	}
+	return data, nil
+}
+
+// CleanupOutputFiles removes output files matching the given prefix in the directory.
+func CleanupOutputFiles(dir string, prefix string) (int, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, err
+	}
+
+	removed := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if prefix == "" || len(entry.Name()) >= len(prefix) && entry.Name()[:len(prefix)] == prefix {
+			fullPath := filepath.Join(dir, entry.Name())
+			if err := os.Remove(fullPath); err == nil {
+				removed++
+			}
+		}
+	}
+	return removed, nil
+}
+
+// CaptureOutput manages writing process output to files and buffers simultaneously.
+type OutputFileCapture struct {
+	mu        sync.Mutex
+	stdoutFile *os.File
+	stderrFile *os.File
+	stdoutBuf  *RingBuffer
+	stderrBuf  *RingBuffer
+	baseDir    string
+}
+
+// NewOutputFileCapture creates a new OutputFileCapture that writes to files and buffers.
+func NewOutputFileCapture(baseDir string) (*OutputFileCapture, error) {
+	if err := os.MkdirAll(baseDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create base directory: %w", err)
+	}
+
+	stdoutPath := filepath.Join(baseDir, "stdout.log")
+	stderrPath := filepath.Join(baseDir, "stderr.log")
+
+	stdoutFile, err := os.Create(stdoutPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stdout file: %w", err)
+	}
+
+	stderrFile, err := os.Create(stderrPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stderr file: %w", err)
+	}
+
+	return &OutputFileCapture{
+		stdoutFile: stdoutFile,
+		stderrFile: stderrFile,
+		stdoutBuf:  NewRingBuffer(10 * 1024 * 1024),
+		stderrBuf:  NewRingBuffer(10 * 1024 * 1024),
+		baseDir:    baseDir,
+	}, nil
+}
+
+// StdoutWriter returns an io.Writer that captures stdout to both file and buffer.
+func (c *OutputFileCapture) StdoutWriter() io.Writer {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return io.MultiWriter(c.stdoutFile, c.stdoutBuf)
+}
+
+// StderrWriter returns an io.Writer that captures stderr to both file and buffer.
+func (c *OutputFileCapture) StderrWriter() io.Writer {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return io.MultiWriter(c.stderrFile, c.stderrBuf)
+}
+
+// GetStdout returns the captured stdout content.
+func (c *OutputFileCapture) GetStdout() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.stdoutBuf.String()
+}
+
+// GetStderr returns the captured stderr content.
+func (c *OutputFileCapture) GetStderr() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.stderrBuf.String()
+}
+
+// Close closes the output files.
+func (c *OutputFileCapture) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var errs []error
+	if c.stdoutFile != nil {
+		if err := c.stdoutFile.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if c.stderrFile != nil {
+		if err := c.stderrFile.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("errors closing files: %v", errs)
+	}
+	return nil
+}
+
+// Reset clears the internal buffers.
+func (c *OutputFileCapture) Reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.stdoutBuf.Reset()
+	c.stderrBuf.Reset()
+}
+
+// SetWriteLimit sets the write limit on both files.
+func (c *OutputFileCapture) SetWriteLimit(maxBytes int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.stdoutBuf != nil {
+		c.stdoutBuf.size = maxBytes
+	}
+	if c.stderrBuf != nil {
+		c.stderrBuf.size = maxBytes
+	}
+}
+
+// GetFilePaths returns the paths of the stdout and stderr files.
+func (c *OutputFileCapture) GetFilePaths() (stdoutPath, stderrPath string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return filepath.Join(c.baseDir, "stdout.log"), filepath.Join(c.baseDir, "stderr.log")
+}
+
+// Sync flushes file buffers to disk.
+func (c *OutputFileCapture) Sync() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.stdoutFile != nil {
+		if err := c.stdoutFile.Sync(); err != nil {
+			return fmt.Errorf("failed to sync stdout file: %w", err)
+		}
+	}
+	if c.stderrFile != nil {
+		if err := c.stderrFile.Sync(); err != nil {
+			return fmt.Errorf("failed to sync stderr file: %w", err)
+		}
+	}
+	return nil
+}
+
+// SetBaseDir changes the base directory for output files.
+func (c *OutputFileCapture) SetBaseDir(dir string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.baseDir = dir
+}
+
+// GetBaseDir returns the current base directory.
+func (c *OutputFileCapture) GetBaseDir() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.baseDir
+}

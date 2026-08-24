@@ -6,7 +6,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -59,31 +61,32 @@ func (r *Runner) Run(ctx context.Context, name string, args ...string) (*Result,
 
 // RunWithTimeout executes a command with a specific timeout.
 func (r *Runner) RunWithTimeout(ctx context.Context, timeout time.Duration, name string, args ...string) (*Result, error) {
-	// Create a context with timeout
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Create the command
 	cmd := exec.CommandContext(execCtx, name, args...)
 
-	// Set working directory
 	if r.WorkDir != "" {
 		cmd.Dir = r.WorkDir
 	}
 
-	// Set environment
 	if r.Env != nil {
 		cmd.Env = r.Env
 	}
 
-	// Capture output
-	var stdoutBuf, stderrBuf bytes.Buffer
-	stdoutWriter := io.MultiWriter(&stdoutBuf, &LimitedWriter{Max: r.MaxOutputSize})
-	stderrWriter := io.MultiWriter(&stderrBuf, &LimitedWriter{Max: r.MaxOutputSize})
-	cmd.Stdout = stdoutWriter
-	cmd.Stderr = stderrWriter
+	captureDir := filepath.Join(os.TempDir(), fmt.Sprintf("process-%d", time.Now().UnixNano()))
+	outputCapture, captureErr := NewOutputFileCapture(captureDir)
+	if captureErr != nil {
+		var stdoutBuf, stderrBuf bytes.Buffer
+		stdoutWriter := io.MultiWriter(&stdoutBuf, &LimitedWriter{Max: r.MaxOutputSize})
+		stderrWriter := io.MultiWriter(&stderrBuf, &LimitedWriter{Max: r.MaxOutputSize})
+		cmd.Stdout = stdoutWriter
+		cmd.Stderr = stderrWriter
+	} else {
+		cmd.Stdout = outputCapture.StdoutWriter()
+		cmd.Stderr = outputCapture.StderrWriter()
+	}
 
-	// Track the running command
 	cmdID := fmt.Sprintf("cmd-%d", time.Now().UnixNano())
 	r.mu.Lock()
 	r.running[cmdID] = cmd
@@ -94,20 +97,30 @@ func (r *Runner) RunWithTimeout(ctx context.Context, timeout time.Duration, name
 		r.mu.Unlock()
 	}()
 
-	// Start timing
 	startTime := time.Now()
 
-	// Run the command
 	err := cmd.Run()
 	duration := time.Since(startTime)
 
+	if outputCapture != nil && err == nil {
+		outputCapture.Close()
+	}
+
+	var stdoutStr, stderrStr string
+	if outputCapture != nil {
+		stdoutStr = outputCapture.GetStdout()
+		stderrStr = outputCapture.GetStderr()
+	} else {
+		stdoutStr = ""
+		stderrStr = ""
+	}
+
 	result := &Result{
-		Stdout:   stdoutBuf.String(),
-		Stderr:   stderrBuf.String(),
+		Stdout:   stdoutStr,
+		Stderr:   stderrStr,
 		Duration: duration,
 	}
 
-	// Determine exit code and if it was timed out
 	if err != nil {
 		if execCtx.Err() == context.DeadlineExceeded {
 			result.TimedOut = true
@@ -116,7 +129,6 @@ func (r *Runner) RunWithTimeout(ctx context.Context, timeout time.Duration, name
 			result.Killed = true
 			result.ExitCode = -1
 		} else {
-			// Try to get the exit code
 			if exitErr, ok := err.(*exec.ExitError); ok {
 				result.ExitCode = exitErr.ExitCode()
 			} else {
@@ -150,11 +162,18 @@ func (r *Runner) RunWithStdinTimeout(ctx context.Context, stdin string, timeout 
 
 	cmd.Stdin = strings.NewReader(stdin)
 
-	var stdoutBuf, stderrBuf bytes.Buffer
-	stdoutWriter := io.MultiWriter(&stdoutBuf, &LimitedWriter{Max: r.MaxOutputSize})
-	stderrWriter := io.MultiWriter(&stderrBuf, &LimitedWriter{Max: r.MaxOutputSize})
-	cmd.Stdout = stdoutWriter
-	cmd.Stderr = stderrWriter
+	captureDir := filepath.Join(os.TempDir(), fmt.Sprintf("process-stdin-%d", time.Now().UnixNano()))
+	outputCapture, captureErr := NewOutputFileCapture(captureDir)
+	if captureErr != nil {
+		var stdoutBuf, stderrBuf bytes.Buffer
+		stdoutWriter := io.MultiWriter(&stdoutBuf, &LimitedWriter{Max: r.MaxOutputSize})
+		stderrWriter := io.MultiWriter(&stderrBuf, &LimitedWriter{Max: r.MaxOutputSize})
+		cmd.Stdout = stdoutWriter
+		cmd.Stderr = stderrWriter
+	} else {
+		cmd.Stdout = outputCapture.StdoutWriter()
+		cmd.Stderr = outputCapture.StderrWriter()
+	}
 
 	cmdID := fmt.Sprintf("cmd-%d", time.Now().UnixNano())
 	r.mu.Lock()
@@ -170,9 +189,22 @@ func (r *Runner) RunWithStdinTimeout(ctx context.Context, stdin string, timeout 
 	err := cmd.Run()
 	duration := time.Since(startTime)
 
+	if outputCapture != nil && err == nil {
+		outputCapture.Close()
+	}
+
+	var stdoutStr, stderrStr string
+	if outputCapture != nil {
+		stdoutStr = outputCapture.GetStdout()
+		stderrStr = outputCapture.GetStderr()
+	} else {
+		stdoutStr = ""
+		stderrStr = ""
+	}
+
 	result := &Result{
-		Stdout:   stdoutBuf.String(),
-		Stderr:   stderrBuf.String(),
+		Stdout:   stdoutStr,
+		Stderr:   stderrStr,
 		Duration: duration,
 	}
 
