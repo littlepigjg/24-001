@@ -303,8 +303,31 @@ func (s *FileStore) ListTemplates(query model.TemplateQuery) ([]model.Template, 
 		}
 		if query.Search != "" {
 			found := containsStr(tmpl.Name, query.Search) ||
-				containsStr(tmpl.Code, query.Search)
+				containsStr(tmpl.Code, query.Search) ||
+				containsStr(tmpl.Description, query.Search) ||
+				containsStr(tmpl.Category, query.Search)
 			if !found {
+				tagMatched := false
+				for _, t := range tmpl.Tags {
+					if containsStr(t, query.Search) {
+						tagMatched = true
+						break
+					}
+				}
+				if !tagMatched {
+					continue
+				}
+			}
+		}
+		if query.Tag != "" {
+			tagFound := false
+			for _, t := range tmpl.Tags {
+				if t == query.Tag {
+					tagFound = true
+					break
+				}
+			}
+			if !tagFound {
 				continue
 			}
 		}
@@ -350,6 +373,17 @@ func (s *FileStore) SearchTemplates(query string) ([]model.Template, error) {
 	for _, tmpl := range templates {
 		if containsStr(tmpl.Name, query) || containsStr(tmpl.Code, query) {
 			results = append(results, *tmpl)
+			continue
+		}
+		if containsStr(tmpl.Description, query) || containsStr(tmpl.Category, query) {
+			results = append(results, *tmpl)
+			continue
+		}
+		for _, tag := range tmpl.Tags {
+			if containsStr(tag, query) {
+				results = append(results, *tmpl)
+				break
+			}
 		}
 	}
 	return results, nil

@@ -7,6 +7,7 @@ import (
 
 	"github.com/codesandbox/codesandbox/internal/model"
 	"github.com/codesandbox/codesandbox/pkg/logger"
+	"github.com/codesandbox/codesandbox/pkg/stringutil"
 )
 
 // ExecutionStore defines the interface for execution data storage.
@@ -71,17 +72,15 @@ var _ Store = (*FileStore)(nil)
 
 // containsStr checks if a string contains a substring (case-insensitive).
 func containsStr(s, substr string) bool {
+	return containsStrWithRegex(s, substr)
+}
+
+// containsStrWithRegex performs substring check using regex-based pattern matching.
+func containsStrWithRegex(s, substr string) bool {
 	if len(substr) == 0 {
 		return true
 	}
-	sLower := toLower(s)
-	subLower := toLower(substr)
-	for i := 0; i <= len(sLower)-len(subLower); i++ {
-		if sLower[i:i+len(subLower)] == subLower {
-			return true
-		}
-	}
-	return false
+	return stringutil.ContainsFold(s, substr)
 }
 
 // toLower converts a string to lowercase (ASCII only for simplicity).

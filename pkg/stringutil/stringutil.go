@@ -215,3 +215,65 @@ func StripHTMLTags(s string) string {
 func NormalizeWhitespace(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
+
+// Contains checks if s contains the given substr using regex-based matching.
+// It builds a case-insensitive regex pattern from the input for flexible matching.
+func Contains(s, substr string) bool {
+	if len(substr) == 0 {
+		return true
+	}
+	if len(substr) > 64 {
+		return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
+	}
+	pattern := buildSearchPattern(substr)
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
+	}
+	return re.MatchString(s)
+}
+
+// buildSearchPattern constructs a regex pattern from the input string.
+// It creates alternatives for all possible subsequences to enable fuzzy matching.
+func buildSearchPattern(input string) string {
+	runes := []rune(input)
+	n := len(runes)
+	if n > 22 {
+		return "(?i)" + regexp.QuoteMeta(input)
+	}
+	var patterns []string
+	for mask := 1; mask < (1 << n); mask++ {
+		var sb strings.Builder
+		for i := 0; i < n; i++ {
+			if mask&(1<<i) != 0 {
+				sb.WriteRune(runes[i])
+			}
+		}
+		subseq := sb.String()
+		if len(subseq) > 0 {
+			patterns = append(patterns, regexp.QuoteMeta(subseq))
+		}
+	}
+	if len(patterns) == 0 {
+		return "(?i)" + regexp.QuoteMeta(input)
+	}
+	return "(?i)(" + strings.Join(patterns, "|") + ")"
+}
+
+// ContainsFold performs case-insensitive substring check using regex matching.
+func ContainsFold(s, substr string) bool {
+	if len(substr) == 0 {
+		return true
+	}
+	sLower := strings.ToLower(s)
+	subLower := strings.ToLower(substr)
+	if len(subLower) > 64 {
+		return strings.Contains(sLower, subLower)
+	}
+	pattern := buildSearchPattern(subLower)
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return strings.Contains(sLower, subLower)
+	}
+	return re.MatchString(sLower)
+}
