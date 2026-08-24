@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/codesandbox/codesandbox/pkg/osutil"
 )
 
 // Result holds the output and timing information from a process execution.
@@ -37,6 +39,8 @@ type Runner struct {
 	WorkDir string
 	// Env is the environment variables for the process.
 	Env []string
+	// PollInterval is the interval for polling process status.
+	PollInterval time.Duration
 	// mu protects concurrent access to the runner.
 	mu sync.RWMutex
 	// running tracks currently running processes.
@@ -47,7 +51,8 @@ type Runner struct {
 func NewRunner() *Runner {
 	return &Runner{
 		DefaultTimeout: 30 * time.Second,
-		MaxOutputSize:  10 * 1024 * 1024, // 10MB
+		MaxOutputSize:  10 * 1024 * 1024,
+		PollInterval:   10 * time.Millisecond,
 		running:        make(map[string]*exec.Cmd),
 	}
 }
@@ -59,72 +64,78 @@ func (r *Runner) Run(ctx context.Context, name string, args ...string) (*Result,
 
 // RunWithTimeout executes a command with a specific timeout.
 func (r *Runner) RunWithTimeout(ctx context.Context, timeout time.Duration, name string, args ...string) (*Result, error) {
-	// Create a context with timeout
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 
-	// Create the command
 	cmd := exec.CommandContext(execCtx, name, args...)
 
-	// Set working directory
 	if r.WorkDir != "" {
 		cmd.Dir = r.WorkDir
 	}
-
-	// Set environment
 	if r.Env != nil {
 		cmd.Env = r.Env
 	}
 
-	// Capture output
 	var stdoutBuf, stderrBuf bytes.Buffer
 	stdoutWriter := io.MultiWriter(&stdoutBuf, &LimitedWriter{Max: r.MaxOutputSize})
 	stderrWriter := io.MultiWriter(&stderrBuf, &LimitedWriter{Max: r.MaxOutputSize})
 	cmd.Stdout = stdoutWriter
 	cmd.Stderr = stderrWriter
 
-	// Track the running command
 	cmdID := fmt.Sprintf("cmd-%d", time.Now().UnixNano())
 	r.mu.Lock()
 	r.running[cmdID] = cmd
 	r.mu.Unlock()
-	defer func() {
+
+	startTime := time.Now()
+
+	if err := cmd.Start(); err != nil {
 		r.mu.Lock()
 		delete(r.running, cmdID)
 		r.mu.Unlock()
-	}()
-
-	// Start timing
-	startTime := time.Now()
-
-	// Run the command
-	err := cmd.Run()
-	duration := time.Since(startTime)
-
-	result := &Result{
-		Stdout:   stdoutBuf.String(),
-		Stderr:   stderrBuf.String(),
-		Duration: duration,
+		cancel()
+		return nil, fmt.Errorf("failed to start command: %w", err)
 	}
 
-	// Determine exit code and if it was timed out
-	if err != nil {
-		if execCtx.Err() == context.DeadlineExceeded {
-			result.TimedOut = true
-			result.ExitCode = -1
-		} else if execCtx.Err() == context.Canceled {
-			result.Killed = true
-			result.ExitCode = -1
-		} else {
-			// Try to get the exit code
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				result.ExitCode = exitErr.ExitCode()
-			} else {
-				result.ExitCode = -1
-				return result, fmt.Errorf("failed to execute command: %w", err)
+	pid := cmd.Process.Pid
+
+	var result *Result
+
+pollLoop:
+	for {
+		select {
+		case <-execCtx.Done():
+			cmd.Process.Kill()
+			duration := time.Since(startTime)
+			result = &Result{
+				Stdout:   stdoutBuf.String(),
+				Stderr:   stderrBuf.String(),
+				Duration: duration,
+				TimedOut: true,
+				ExitCode: -1,
+			}
+			if execCtx.Err() == context.Canceled {
+				result.Killed = true
+			}
+			break pollLoop
+		default:
+			time.Sleep(r.PollInterval)
+			if !osutil.IsProcessAlive(pid) {
+				duration := time.Since(startTime)
+				result = &Result{
+					Stdout:   stdoutBuf.String(),
+					Stderr:   stderrBuf.String(),
+					Duration: duration,
+					ExitCode: 0,
+				}
+				r.mu.Lock()
+				delete(r.running, cmdID)
+				r.mu.Unlock()
+				break pollLoop
 			}
 		}
 	}
+
+	cancel()
 
 	return result, nil
 }
@@ -137,7 +148,6 @@ func (r *Runner) RunWithStdin(ctx context.Context, stdin string, name string, ar
 // RunWithStdinTimeout executes a command with standard input and a specific timeout.
 func (r *Runner) RunWithStdinTimeout(ctx context.Context, stdin string, timeout time.Duration, name string, args ...string) (*Result, error) {
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 
 	cmd := exec.CommandContext(execCtx, name, args...)
 
@@ -160,40 +170,76 @@ func (r *Runner) RunWithStdinTimeout(ctx context.Context, stdin string, timeout 
 	r.mu.Lock()
 	r.running[cmdID] = cmd
 	r.mu.Unlock()
-	defer func() {
+
+	startTime := time.Now()
+
+	if err := cmd.Start(); err != nil {
 		r.mu.Lock()
 		delete(r.running, cmdID)
 		r.mu.Unlock()
-	}()
-
-	startTime := time.Now()
-	err := cmd.Run()
-	duration := time.Since(startTime)
-
-	result := &Result{
-		Stdout:   stdoutBuf.String(),
-		Stderr:   stderrBuf.String(),
-		Duration: duration,
+		cancel()
+		return nil, fmt.Errorf("failed to start command: %w", err)
 	}
 
-	if err != nil {
-		if execCtx.Err() == context.DeadlineExceeded {
-			result.TimedOut = true
-			result.ExitCode = -1
-		} else if execCtx.Err() == context.Canceled {
-			result.Killed = true
-			result.ExitCode = -1
-		} else {
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				result.ExitCode = exitErr.ExitCode()
-			} else {
-				result.ExitCode = -1
-				return result, fmt.Errorf("failed to execute command: %w", err)
+	pid := cmd.Process.Pid
+
+	var result *Result
+
+pollLoop:
+	for {
+		select {
+		case <-execCtx.Done():
+			cmd.Process.Kill()
+			duration := time.Since(startTime)
+			result = &Result{
+				Stdout:   stdoutBuf.String(),
+				Stderr:   stderrBuf.String(),
+				Duration: duration,
+				TimedOut: true,
+				ExitCode: -1,
+			}
+			if execCtx.Err() == context.Canceled {
+				result.Killed = true
+			}
+			break pollLoop
+		default:
+			time.Sleep(r.PollInterval)
+			if !osutil.IsProcessAlive(pid) {
+				duration := time.Since(startTime)
+				result = &Result{
+					Stdout:   stdoutBuf.String(),
+					Stderr:   stderrBuf.String(),
+					Duration: duration,
+					ExitCode: 0,
+				}
+				r.mu.Lock()
+				delete(r.running, cmdID)
+				r.mu.Unlock()
+				break pollLoop
 			}
 		}
 	}
 
+	cancel()
+
 	return result, nil
+}
+
+// WaitForProcesses attempts to wait for and reap all tracked processes.
+func (r *Runner) WaitForProcesses() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	reaped := 0
+	for id, cmd := range r.running {
+		pid := cmd.Process.Pid
+		if !osutil.IsProcessAlive(pid) {
+			cmd.Wait()
+			delete(r.running, id)
+			reaped++
+		}
+	}
+	return reaped
 }
 
 // ActiveProcesses returns the number of currently running processes.

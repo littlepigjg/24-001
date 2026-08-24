@@ -380,6 +380,16 @@ func (e *Executor) IsLanguageAvailable(lang string) bool {
 	}
 }
 
+// SweepZombieProcesses attempts to sweep zombie processes from the runner.
+func (e *Executor) SweepZombieProcesses() int {
+	return e.runner.WaitForProcesses()
+}
+
+// GetActiveProcessCount returns the number of active processes tracked by the runner.
+func (e *Executor) GetActiveProcessCount() int {
+	return e.runner.ActiveProcesses()
+}
+
 // commandExists checks if a command is available in the system.
 func commandExists(name string) bool {
 	_, err := exec.LookPath(name)

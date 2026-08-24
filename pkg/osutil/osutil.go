@@ -197,3 +197,56 @@ func IsExecutable(path string) bool {
 func MakeExecutable(path string) error {
 	return os.Chmod(path, 0755)
 }
+
+// IsProcessAlive checks if a process with the given PID exists.
+func IsProcessAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	path := fmt.Sprintf("/proc/%d", pid)
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// ReadProcessStatus reads the State field from /proc/[pid]/status.
+func ReadProcessStatus(pid int) (string, error) {
+	if pid <= 0 {
+		return "", fmt.Errorf("invalid pid: %d", pid)
+	}
+	statusPath := fmt.Sprintf("/proc/%d/status", pid)
+	data, err := os.ReadFile(statusPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read process status: %w", err)
+	}
+	content := string(data)
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(line, "State:") {
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				return parts[1], nil
+			}
+		}
+	}
+	return "", fmt.Errorf("state not found in process status")
+}
+
+// IsProcessZombie checks if a process is in zombie state (Z).
+func IsProcessZombie(pid int) bool {
+	state, err := ReadProcessStatus(pid)
+	if err != nil {
+		return false
+	}
+	return state == "Z"
+}
+
+// KillProcess sends SIGKILL to the process with the given PID.
+func KillProcess(pid int) error {
+	if pid <= 0 {
+		return fmt.Errorf("invalid pid: %d", pid)
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return fmt.Errorf("failed to find process: %w", err)
+	}
+	return process.Kill()
+}
