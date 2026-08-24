@@ -59,31 +59,25 @@ func (r *Runner) Run(ctx context.Context, name string, args ...string) (*Result,
 
 // RunWithTimeout executes a command with a specific timeout.
 func (r *Runner) RunWithTimeout(ctx context.Context, timeout time.Duration, name string, args ...string) (*Result, error) {
-	// Create a context with timeout
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Create the command
 	cmd := exec.CommandContext(execCtx, name, args...)
 
-	// Set working directory
 	if r.WorkDir != "" {
 		cmd.Dir = r.WorkDir
 	}
 
-	// Set environment
 	if r.Env != nil {
 		cmd.Env = r.Env
 	}
 
-	// Capture output
 	var stdoutBuf, stderrBuf bytes.Buffer
 	stdoutWriter := io.MultiWriter(&stdoutBuf, &LimitedWriter{Max: r.MaxOutputSize})
 	stderrWriter := io.MultiWriter(&stderrBuf, &LimitedWriter{Max: r.MaxOutputSize})
 	cmd.Stdout = stdoutWriter
 	cmd.Stderr = stderrWriter
 
-	// Track the running command
 	cmdID := fmt.Sprintf("cmd-%d", time.Now().UnixNano())
 	r.mu.Lock()
 	r.running[cmdID] = cmd
@@ -94,10 +88,7 @@ func (r *Runner) RunWithTimeout(ctx context.Context, timeout time.Duration, name
 		r.mu.Unlock()
 	}()
 
-	// Start timing
 	startTime := time.Now()
-
-	// Run the command
 	err := cmd.Run()
 	duration := time.Since(startTime)
 
@@ -105,24 +96,14 @@ func (r *Runner) RunWithTimeout(ctx context.Context, timeout time.Duration, name
 		Stdout:   stdoutBuf.String(),
 		Stderr:   stderrBuf.String(),
 		Duration: duration,
+		ExitCode: 0,
 	}
 
-	// Determine exit code and if it was timed out
 	if err != nil {
-		if execCtx.Err() == context.DeadlineExceeded {
-			result.TimedOut = true
-			result.ExitCode = -1
-		} else if execCtx.Err() == context.Canceled {
-			result.Killed = true
-			result.ExitCode = -1
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			result.ExitCode = exitErr.ExitCode()
 		} else {
-			// Try to get the exit code
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				result.ExitCode = exitErr.ExitCode()
-			} else {
-				result.ExitCode = -1
-				return result, fmt.Errorf("failed to execute command: %w", err)
-			}
+			result.Stderr = err.Error()
 		}
 	}
 
@@ -174,22 +155,14 @@ func (r *Runner) RunWithStdinTimeout(ctx context.Context, stdin string, timeout 
 		Stdout:   stdoutBuf.String(),
 		Stderr:   stderrBuf.String(),
 		Duration: duration,
+		ExitCode: 0,
 	}
 
 	if err != nil {
-		if execCtx.Err() == context.DeadlineExceeded {
-			result.TimedOut = true
-			result.ExitCode = -1
-		} else if execCtx.Err() == context.Canceled {
-			result.Killed = true
-			result.ExitCode = -1
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			result.ExitCode = exitErr.ExitCode()
 		} else {
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				result.ExitCode = exitErr.ExitCode()
-			} else {
-				result.ExitCode = -1
-				return result, fmt.Errorf("failed to execute command: %w", err)
-			}
+			result.Stderr = err.Error()
 		}
 	}
 

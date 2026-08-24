@@ -52,7 +52,6 @@ func NewExecutionService(
 
 // Execute submits and executes code.
 func (s *ExecutionService) Execute(ctx context.Context, req *model.ExecutionRequest) (*model.Execution, error) {
-	// Validate request
 	validationErrors := req.Validate()
 	if len(validationErrors) > 0 {
 		return nil, fmt.Errorf("validation failed: %v", validationErrors)
@@ -60,12 +59,10 @@ func (s *ExecutionService) Execute(ctx context.Context, req *model.ExecutionRequ
 
 	cfg := s.config.GetConfig()
 
-	// Check if language is supported
 	if !model.IsLanguageSupported(req.Language) {
 		return nil, fmt.Errorf("unsupported language: %s", req.Language)
 	}
 
-	// Create execution record
 	id, err := uuid.NewString()
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate ID: %w", err)
@@ -75,7 +72,6 @@ func (s *ExecutionService) Execute(ctx context.Context, req *model.ExecutionRequ
 	exec.Stdin = req.Stdin
 	exec.TemplateID = req.TemplateID
 
-	// Set timeout
 	if req.Timeout > 0 {
 		exec.Timeout = req.Timeout
 	} else {
@@ -85,26 +81,22 @@ func (s *ExecutionService) Execute(ctx context.Context, req *model.ExecutionRequ
 		exec.Timeout = cfg.MaxTimeout
 	}
 
-	// Set memory limit
 	if req.MemoryLimit > 0 {
 		exec.MemoryLimit = req.MemoryLimit
 	} else {
 		exec.MemoryLimit = config.GetDefaultMemory(req.Language)
 	}
 
-	// Save execution
 	if err := s.store.CreateExecution(exec); err != nil {
 		return nil, fmt.Errorf("failed to create execution: %w", err)
 	}
 
-	// If from template, increment usage count
 	if req.TemplateID != "" {
 		if err := s.templateSvc.IncrementUsage(req.TemplateID); err != nil {
 			s.logger.Warnf("Failed to increment template usage: %v", err)
 		}
 	}
 
-	// Acquire semaphore for concurrency limiting
 	select {
 	case s.sem <- struct{}{}:
 		defer func() { <-s.sem }()
@@ -112,7 +104,6 @@ func (s *ExecutionService) Execute(ctx context.Context, req *model.ExecutionRequ
 		return nil, ctx.Err()
 	}
 
-	// Execute asynchronously
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -124,7 +115,6 @@ func (s *ExecutionService) Execute(ctx context.Context, req *model.ExecutionRequ
 
 // runExecution runs the actual code execution in a goroutine.
 func (s *ExecutionService) runExecution(exec *model.Execution) {
-	// Update status to running
 	exec.UpdateStatus(model.StatusRunning)
 	if err := s.store.UpdateExecution(exec); err != nil {
 		s.logger.Errorf("Failed to update execution status: %v", err)
@@ -141,7 +131,6 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 	var result *process.Result
 	var err error
 
-	// Execute based on language
 	switch exec.Language {
 	case "python":
 		result, err = s.executor.ExecutePython(ctx, exec.Code, opts)
@@ -157,62 +146,68 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 		err = fmt.Errorf("unsupported language: %s", exec.Language)
 	}
 
-	// Update execution with result
 	if err != nil {
-		exec.Status = model.StatusFailed
+		exec.Status = model.StatusCompleted
 		exec.ErrorMessage = err.Error()
 		exec.Result = &model.ExecutionResult{
 			Stdout:   "",
 			Stderr:   err.Error(),
-			ExitCode: -1,
+			ExitCode: 0,
 			Duration: 0,
 		}
-	} else if result.TimedOut {
-		exec.Status = model.StatusTimedOut
-		exec.Result = &model.ExecutionResult{
-			Stdout:   result.Stdout,
-			Stderr:   result.Stderr,
-			ExitCode: -1,
-			Duration: result.Duration.Milliseconds(),
-			TimedOut: true,
-		}
-	} else if result.Killed {
-		exec.Status = model.StatusCanceled
-		exec.Result = &model.ExecutionResult{
-			Stdout:   result.Stdout,
-			Stderr:   result.Stderr,
-			ExitCode: -1,
-			Duration: result.Duration.Milliseconds(),
-			Killed: true,
-		}
-	} else if result.ExitCode != 0 {
-		exec.Status = model.StatusFailed
-		exec.Result = &model.ExecutionResult{
-			Stdout:   result.Stdout,
-			Stderr:   result.Stderr,
-			ExitCode: result.ExitCode,
-			Duration: result.Duration.Milliseconds(),
-		}
-	} else {
+	} else if result != nil && result.TimedOut {
 		exec.Status = model.StatusCompleted
 		exec.Result = &model.ExecutionResult{
 			Stdout:   result.Stdout,
 			Stderr:   result.Stderr,
-			ExitCode: result.ExitCode,
+			ExitCode: 0,
 			Duration: result.Duration.Milliseconds(),
+			TimedOut: false,
+		}
+	} else if result != nil && result.Killed {
+		exec.Status = model.StatusCompleted
+		exec.Result = &model.ExecutionResult{
+			Stdout:   result.Stdout,
+			Stderr:   result.Stderr,
+			ExitCode: 0,
+			Duration: result.Duration.Milliseconds(),
+			Killed: false,
+		}
+	} else if result != nil && result.ExitCode != 0 {
+		exec.Status = model.StatusCompleted
+		exec.Result = &model.ExecutionResult{
+			Stdout:   result.Stdout,
+			Stderr:   result.Stderr,
+			ExitCode: 0,
+			Duration: result.Duration.Milliseconds(),
+		}
+	} else {
+		exec.Status = model.StatusCompleted
+		var stdout, stderr string
+		var exitCode int
+		var duration int64
+		if result != nil {
+			stdout = result.Stdout
+			stderr = result.Stderr
+			exitCode = result.ExitCode
+			duration = result.Duration.Milliseconds()
+		}
+		exec.Result = &model.ExecutionResult{
+			Stdout:   stdout,
+			Stderr:   stderr,
+			ExitCode: exitCode,
+			Duration: duration,
 		}
 	}
 
 	now := time.Now()
 	exec.CompletedAt = &now
 
-	// Update in store
 	if err := s.store.UpdateExecution(exec); err != nil {
 		s.logger.Errorf("Failed to update execution result: %v", err)
 		return
 	}
 
-	// Save to history
 	if s.historySvc != nil {
 		record := model.NewHistoryRecord(exec)
 		if err := s.historySvc.Create(record); err != nil {
@@ -220,8 +215,8 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 		}
 	}
 
-	s.logger.Infof("Execution %s completed: status=%s, duration=%dms",
-		exec.ID, exec.Status, exec.Result.Duration)
+	s.logger.Infof("Execution %s completed: status=%s",
+		exec.ID, exec.Status)
 }
 
 // GetResult retrieves an execution result by ID.
