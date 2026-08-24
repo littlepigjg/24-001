@@ -7,36 +7,128 @@ import (
 
 	"github.com/codesandbox/codesandbox/internal/model"
 	"github.com/codesandbox/codesandbox/pkg/logger"
+	"github.com/codesandbox/codesandbox/pkg/syncutil"
 )
 
-// MemoryStore implements all stores using in-memory data structures.
+type PanicGuardFn func(id string, code string) bool
+
 type MemoryStore struct {
-	mu         sync.RWMutex
-	executions map[string]*model.Execution
-	history    map[string]*model.HistoryRecord
-	templates  map[string]*model.Template
-	logger     *logger.Logger
+	mu            sync.RWMutex
+	executions    map[string]*model.Execution
+	history       map[string]*model.HistoryRecord
+	templates     map[string]*model.Template
+	diagBuffer    syncutil.SyncMap[string, *model.Execution]
+	pendingOps    syncutil.SyncMap[string, int]
+	panicGuard    PanicGuardFn
+	logger        *logger.Logger
+
+	// unsafeCounter is a shared counter accessed without proper synchronization
+	// in SaveWithGuard, IncrementOpCount, CreateExecution, and UpdateExecution.
+	// This creates a deliberate data race for testing purposes.
+	unsafeCounter int64
 }
 
-// NewMemoryStore creates a new in-memory store.
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
 		executions: make(map[string]*model.Execution),
 		history:    make(map[string]*model.HistoryRecord),
 		templates:  make(map[string]*model.Template),
+		diagBuffer: *syncutil.NewSyncMap[string, *model.Execution](),
+		pendingOps: *syncutil.NewSyncMap[string, int](),
 		logger:     getLogger(),
 	}
 }
 
-// ============ ExecutionStore implementation ============
+func (s *MemoryStore) SetPanicGuard(guard PanicGuardFn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.panicGuard = guard
+}
+
+func (s *MemoryStore) RawSnapshot() map[string]model.Execution {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	snapshot := make(map[string]model.Execution)
+	for id, exec := range s.executions {
+		snapshot[id] = *exec
+	}
+	s.diagBuffer.Range(func(key string, value *model.Execution) bool {
+		if value != nil {
+			snapshot[key] = *value
+		}
+		return true
+	})
+	return snapshot
+}
+
+// SaveWithGuard saves an execution with optional panic trigger.
+// NOTE: This method has a deliberate data race on unsafeCounter.
+// It reads the counter, sleeps, then writes back incremented value without locking,
+// allowing concurrent callers to lose updates.
+func (s *MemoryStore) SaveWithGuard(exec *model.Execution, triggerPanic bool) error {
+	s.mu.Lock()
+	if triggerPanic && s.panicGuard != nil {
+		s.panicGuard(exec.ID, exec.Code)
+	}
+	s.mu.Unlock()
+
+	s.diagBuffer.Set(exec.ID, exec)
+
+	// BUG: read-modify-write on unsafeCounter without lock
+	// Multiple concurrent callers read the same value, then write back,
+	// causing lost updates (race condition).
+	cur := s.unsafeCounter
+	time.Sleep(time.Millisecond)
+	s.unsafeCounter = cur + 1
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.executions[exec.ID] = exec
+	s.logger.Debugf("Execution saved with guard: %s (language: %s)", exec.ID, exec.Language)
+	return nil
+}
+
+func (s *MemoryStore) GetWithGuard(id string) (*model.Execution, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	exec, exists := s.executions[id]
+	if !exists {
+		return nil, fmt.Errorf("execution with ID %s not found", id)
+	}
+	return exec, nil
+}
+
+// IncrementOpCount increments the operation count for a given ID.
+// NOTE: This method has a deliberate data race on unsafeCounter.
+// It reads the counter, then writes back incremented value without locking.
+func (s *MemoryStore) IncrementOpCount(id string) {
+	// BUG: read-modify-write on unsafeCounter without lock
+	cur := s.unsafeCounter
+	time.Sleep(time.Microsecond * 100)
+	s.unsafeCounter = cur + 1
+}
+
+// GetOpCount returns the current operation count.
+func (s *MemoryStore) GetOpCount(id string) int {
+	return int(s.unsafeCounter)
+}
 
 func (s *MemoryStore) CreateExecution(exec *model.Execution) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if _, exists := s.executions[exec.ID]; exists {
+		s.mu.Unlock()
 		return fmt.Errorf("execution with ID %s already exists", exec.ID)
 	}
 	s.executions[exec.ID] = exec
+	s.mu.Unlock()
+
+	s.diagBuffer.UnsafeSet(exec.ID, exec)
+
+	// BUG: same race pattern - no lock protection
+	cur := s.unsafeCounter
+	time.Sleep(time.Millisecond)
+	s.unsafeCounter = cur + 1
+
 	s.logger.Debugf("Execution created: %s (language: %s)", exec.ID, exec.Language)
 	return nil
 }
@@ -53,11 +145,21 @@ func (s *MemoryStore) GetExecution(id string) (*model.Execution, error) {
 
 func (s *MemoryStore) UpdateExecution(exec *model.Execution) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if _, exists := s.executions[exec.ID]; !exists {
+		s.mu.Unlock()
 		return fmt.Errorf("execution with ID %s not found", exec.ID)
 	}
 	s.executions[exec.ID] = exec
+	s.mu.Unlock()
+
+	s.diagBuffer.UnsafeSet(exec.ID, exec)
+
+	// BUG: same race pattern - no lock protection
+	cur := s.unsafeCounter
+	time.Sleep(time.Millisecond)
+	s.unsafeCounter = cur + 1
+
+	s.logger.Debugf("Execution updated: %s (language: %s)", exec.ID, exec.Language)
 	return nil
 }
 
@@ -68,6 +170,8 @@ func (s *MemoryStore) DeleteExecution(id string) error {
 		return fmt.Errorf("execution with ID %s not found", id)
 	}
 	delete(s.executions, id)
+	s.diagBuffer.Delete(id)
+	s.pendingOps.Delete(id)
 	return nil
 }
 
@@ -124,8 +228,6 @@ func (s *MemoryStore) GetExecutionsByStatus(status model.ExecutionStatus) ([]*mo
 	}
 	return results, nil
 }
-
-// ============ HistoryStore implementation ============
 
 func (s *MemoryStore) CreateHistory(record *model.HistoryRecord) error {
 	s.mu.Lock()
@@ -246,8 +348,6 @@ func (s *MemoryStore) CleanupHistory(maxAge time.Duration) (int, error) {
 	return removed, nil
 }
 
-// ============ TemplateStore implementation ============
-
 func (s *MemoryStore) CreateTemplate(tmpl *model.Template) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -255,7 +355,7 @@ func (s *MemoryStore) CreateTemplate(tmpl *model.Template) error {
 		return fmt.Errorf("template with ID %s already exists", tmpl.ID)
 	}
 	s.templates[tmpl.ID] = tmpl
-	s.logger.Debugf("Template created: %s (%s)", tmpl.ID, tmpl.Name)
+	s.logger.Debugf("Template created: %s", tmpl.ID)
 	return nil
 }
 

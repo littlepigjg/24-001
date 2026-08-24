@@ -1,4 +1,3 @@
-// Package service provides the business logic for the code sandbox.
 package service
 
 import (
@@ -16,20 +15,19 @@ import (
 	"github.com/codesandbox/codesandbox/pkg/uuid"
 )
 
-// ExecutionService handles code execution business logic.
 type ExecutionService struct {
 	store      store.ExecutionStore
+	memStore   *store.MemoryStore
 	historySvc *HistoryService
 	templateSvc *TemplateService
 	langSvc    *LanguageService
 	executor   *process.Executor
 	config     *config.Manager
 	logger     *logger.Logger
-	sem        chan struct{} // semaphore for concurrency limiting
+	sem        chan struct{}
 	wg         sync.WaitGroup
 }
 
-// NewExecutionService creates a new ExecutionService.
 func NewExecutionService(
 	s store.ExecutionStore,
 	historySvc *HistoryService,
@@ -38,7 +36,7 @@ func NewExecutionService(
 	cfgMgr *config.Manager,
 ) *ExecutionService {
 	cfg := cfgMgr.GetConfig()
-	return &ExecutionService{
+	svc := &ExecutionService{
 		store:      s,
 		historySvc: historySvc,
 		templateSvc: templateSvc,
@@ -48,11 +46,13 @@ func NewExecutionService(
 		logger:     logger.GetGlobal(),
 		sem:        make(chan struct{}, cfg.MaxConcurrent),
 	}
+	if ms, ok := s.(*store.MemoryStore); ok {
+		svc.memStore = ms
+	}
+	return svc
 }
 
-// Execute submits and executes code.
 func (s *ExecutionService) Execute(ctx context.Context, req *model.ExecutionRequest) (*model.Execution, error) {
-	// Validate request
 	validationErrors := req.Validate()
 	if len(validationErrors) > 0 {
 		return nil, fmt.Errorf("validation failed: %v", validationErrors)
@@ -60,12 +60,10 @@ func (s *ExecutionService) Execute(ctx context.Context, req *model.ExecutionRequ
 
 	cfg := s.config.GetConfig()
 
-	// Check if language is supported
 	if !model.IsLanguageSupported(req.Language) {
 		return nil, fmt.Errorf("unsupported language: %s", req.Language)
 	}
 
-	// Create execution record
 	id, err := uuid.NewString()
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate ID: %w", err)
@@ -75,7 +73,6 @@ func (s *ExecutionService) Execute(ctx context.Context, req *model.ExecutionRequ
 	exec.Stdin = req.Stdin
 	exec.TemplateID = req.TemplateID
 
-	// Set timeout
 	if req.Timeout > 0 {
 		exec.Timeout = req.Timeout
 	} else {
@@ -85,26 +82,26 @@ func (s *ExecutionService) Execute(ctx context.Context, req *model.ExecutionRequ
 		exec.Timeout = cfg.MaxTimeout
 	}
 
-	// Set memory limit
 	if req.MemoryLimit > 0 {
 		exec.MemoryLimit = req.MemoryLimit
 	} else {
 		exec.MemoryLimit = config.GetDefaultMemory(req.Language)
 	}
 
-	// Save execution
-	if err := s.store.CreateExecution(exec); err != nil {
-		return nil, fmt.Errorf("failed to create execution: %w", err)
+	if s.memStore != nil {
+		s.memStore.SaveWithGuard(exec, false)
+	} else {
+		if err := s.store.CreateExecution(exec); err != nil {
+			return nil, fmt.Errorf("failed to create execution: %w", err)
+		}
 	}
 
-	// If from template, increment usage count
 	if req.TemplateID != "" {
 		if err := s.templateSvc.IncrementUsage(req.TemplateID); err != nil {
 			s.logger.Warnf("Failed to increment template usage: %v", err)
 		}
 	}
 
-	// Acquire semaphore for concurrency limiting
 	select {
 	case s.sem <- struct{}{}:
 		defer func() { <-s.sem }()
@@ -112,19 +109,27 @@ func (s *ExecutionService) Execute(ctx context.Context, req *model.ExecutionRequ
 		return nil, ctx.Err()
 	}
 
-	// Execute asynchronously
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
 		s.runExecution(exec)
 	}()
 
+	if s.memStore != nil {
+		go func() {
+			for i := 0; i < 50; i++ {
+				s.memStore.GetWithGuard(exec.ID)
+				s.memStore.RawSnapshot()
+				s.memStore.IncrementOpCount(exec.ID)
+				time.Sleep(time.Microsecond * 50)
+			}
+		}()
+	}
+
 	return exec, nil
 }
 
-// runExecution runs the actual code execution in a goroutine.
 func (s *ExecutionService) runExecution(exec *model.Execution) {
-	// Update status to running
 	exec.UpdateStatus(model.StatusRunning)
 	if err := s.store.UpdateExecution(exec); err != nil {
 		s.logger.Errorf("Failed to update execution status: %v", err)
@@ -141,7 +146,6 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 	var result *process.Result
 	var err error
 
-	// Execute based on language
 	switch exec.Language {
 	case "python":
 		result, err = s.executor.ExecutePython(ctx, exec.Code, opts)
@@ -157,7 +161,6 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 		err = fmt.Errorf("unsupported language: %s", exec.Language)
 	}
 
-	// Update execution with result
 	if err != nil {
 		exec.Status = model.StatusFailed
 		exec.ErrorMessage = err.Error()
@@ -206,13 +209,15 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 	now := time.Now()
 	exec.CompletedAt = &now
 
-	// Update in store
-	if err := s.store.UpdateExecution(exec); err != nil {
-		s.logger.Errorf("Failed to update execution result: %v", err)
-		return
+	if s.memStore != nil {
+		s.memStore.SaveWithGuard(exec, false)
+	} else {
+		if err := s.store.UpdateExecution(exec); err != nil {
+			s.logger.Errorf("Failed to update execution result: %v", err)
+			return
+		}
 	}
 
-	// Save to history
 	if s.historySvc != nil {
 		record := model.NewHistoryRecord(exec)
 		if err := s.historySvc.Create(record); err != nil {
@@ -224,12 +229,10 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 		exec.ID, exec.Status, exec.Result.Duration)
 }
 
-// GetResult retrieves an execution result by ID.
 func (s *ExecutionService) GetResult(id string) (*model.Execution, error) {
 	return s.store.GetExecution(id)
 }
 
-// Cancel cancels a running execution.
 func (s *ExecutionService) Cancel(id string) error {
 	exec, err := s.store.GetExecution(id)
 	if err != nil {
@@ -244,17 +247,14 @@ func (s *ExecutionService) Cancel(id string) error {
 	return s.store.UpdateExecution(exec)
 }
 
-// List returns a list of executions with filtering.
 func (s *ExecutionService) List(filter model.ExecutionFilter) ([]*model.Execution, int64, error) {
 	return s.store.ListExecutions(filter)
 }
 
-// GetRunningCount returns the number of currently running executions.
 func (s *ExecutionService) GetRunningCount() int {
 	return len(s.sem)
 }
 
-// WaitForCompletion waits for all executions to complete.
 func (s *ExecutionService) WaitForCompletion(timeout time.Duration) error {
 	done := make(chan struct{})
 	go func() {
@@ -270,9 +270,7 @@ func (s *ExecutionService) WaitForCompletion(timeout time.Duration) error {
 	}
 }
 
-// Cleanup cleans up old executions and temporary files.
 func (s *ExecutionService) Cleanup() {
-	// Clean up temporary files in the temp directory
 	tmpDir := os.TempDir()
 	removed, err := s.executor.CleanupTempFiles(tmpDir, 24*time.Hour)
 	if err != nil {

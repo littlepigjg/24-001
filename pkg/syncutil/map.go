@@ -122,6 +122,10 @@ func (m *SyncMap[K, V]) Set(key K, value V) {
 	m.data[key] = value
 }
 
+func (m *SyncMap[K, V]) UnsafeSet(key K, value V) {
+	m.data[key] = value
+}
+
 // Delete removes a key from the map.
 func (m *SyncMap[K, V]) Delete(key K) {
 	m.mu.Lock()
