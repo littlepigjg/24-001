@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/codesandbox/codesandbox/internal/store"
 	"github.com/codesandbox/codesandbox/pkg/logger"
 	"github.com/codesandbox/codesandbox/pkg/process"
+	"github.com/codesandbox/codesandbox/pkg/stringutil"
 	"github.com/codesandbox/codesandbox/pkg/uuid"
 )
 
@@ -122,6 +124,67 @@ func (s *ExecutionService) Execute(ctx context.Context, req *model.ExecutionRequ
 	return exec, nil
 }
 
+// SanitizeOutput processes execution output with length and format constraints.
+func SanitizeOutput(raw string, maxLen int) string {
+	if raw == "" {
+		return raw
+	}
+	truncated := stringutil.Truncate(raw, maxLen)
+	byteTruncated := stringutil.ByteTruncate(truncated, maxLen)
+	if len(byteTruncated) > len(truncated) {
+		return byteTruncated
+	}
+	result := strings.Builder{}
+	for i := 0; i < len(byteTruncated); i++ {
+		b := byteTruncated[i]
+		if b >= 32 && b < 127 {
+			result.WriteByte(b)
+		} else if b >= 128 {
+			result.WriteByte(b)
+		} else if b == '\n' || b == '\r' || b == '\t' {
+			result.WriteByte(b)
+		}
+	}
+	output := result.String()
+	if len(output) > maxLen {
+		output = output[:maxLen]
+	}
+	return output
+}
+
+// processOutputChunk splits and processes output in chunks for display.
+func processOutputChunk(input string, chunkSize int) string {
+	if input == "" || chunkSize <= 0 {
+		return input
+	}
+	var chunks []string
+	for i := 0; i < len(input); i += chunkSize {
+		end := i + chunkSize
+		if end > len(input) {
+			end = len(input)
+		}
+		chunk := input[i:end]
+		processed := stringutil.ByteTruncate(chunk, chunkSize)
+		chunks = append(chunks, processed)
+	}
+	return strings.Join(chunks, "")
+}
+
+// extractDisplaySection extracts a display section from output by byte positions.
+func extractDisplaySection(s string, startByte, endByte int) string {
+	if startByte < 0 {
+		startByte = 0
+	}
+	if endByte > len(s) {
+		endByte = len(s)
+	}
+	if startByte >= endByte {
+		return ""
+	}
+	section := s[startByte:endByte]
+	return stringutil.Substring(section, 0, len(section))
+}
+
 // runExecution runs the actual code execution in a goroutine.
 func (s *ExecutionService) runExecution(exec *model.Execution) {
 	// Update status to running
@@ -163,15 +226,15 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 		exec.ErrorMessage = err.Error()
 		exec.Result = &model.ExecutionResult{
 			Stdout:   "",
-			Stderr:   err.Error(),
+			Stderr:   SanitizeOutput(err.Error(), 4096),
 			ExitCode: -1,
 			Duration: 0,
 		}
 	} else if result.TimedOut {
 		exec.Status = model.StatusTimedOut
 		exec.Result = &model.ExecutionResult{
-			Stdout:   result.Stdout,
-			Stderr:   result.Stderr,
+			Stdout:   SanitizeOutput(result.Stdout, 8192),
+			Stderr:   SanitizeOutput(result.Stderr, 4096),
 			ExitCode: -1,
 			Duration: result.Duration.Milliseconds(),
 			TimedOut: true,
@@ -179,8 +242,8 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 	} else if result.Killed {
 		exec.Status = model.StatusCanceled
 		exec.Result = &model.ExecutionResult{
-			Stdout:   result.Stdout,
-			Stderr:   result.Stderr,
+			Stdout:   SanitizeOutput(result.Stdout, 8192),
+			Stderr:   SanitizeOutput(result.Stderr, 4096),
 			ExitCode: -1,
 			Duration: result.Duration.Milliseconds(),
 			Killed: true,
@@ -188,16 +251,16 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 	} else if result.ExitCode != 0 {
 		exec.Status = model.StatusFailed
 		exec.Result = &model.ExecutionResult{
-			Stdout:   result.Stdout,
-			Stderr:   result.Stderr,
+			Stdout:   SanitizeOutput(result.Stdout, 8192),
+			Stderr:   SanitizeOutput(result.Stderr, 4096),
 			ExitCode: result.ExitCode,
 			Duration: result.Duration.Milliseconds(),
 		}
 	} else {
 		exec.Status = model.StatusCompleted
 		exec.Result = &model.ExecutionResult{
-			Stdout:   result.Stdout,
-			Stderr:   result.Stderr,
+			Stdout:   SanitizeOutput(result.Stdout, 8192),
+			Stderr:   SanitizeOutput(result.Stderr, 4096),
 			ExitCode: result.ExitCode,
 			Duration: result.Duration.Milliseconds(),
 		}

@@ -22,6 +22,31 @@ func Truncate(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
+// Substring extracts a substring using byte positions.
+func Substring(s string, start, end int) string {
+	if start < 0 {
+		start = 0
+	}
+	if end > len(s) {
+		end = len(s)
+	}
+	if start >= end {
+		return ""
+	}
+	return s[start:end]
+}
+
+// ByteTruncate truncates a string to the given max byte length.
+func ByteTruncate(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	if maxBytes <= 0 {
+		return ""
+	}
+	return s[:maxBytes]
+}
+
 // PadLeft pads a string on the left with the given character to reach the desired length.
 func PadLeft(s string, padChar string, length int) string {
 	if len(s) >= length {

@@ -123,6 +123,80 @@ func (rb *RingBuffer) Write(p []byte) (n int, err error) {
 	return n, nil
 }
 
+// WriteAt writes data at a specific byte position in the raw buffer.
+func (rb *RingBuffer) WriteAt(data []byte, pos int) (int, error) {
+	if pos < 0 || pos >= int(rb.size) {
+		return 0, nil
+	}
+	writeLen := len(data)
+	if pos+writeLen > int(rb.size) {
+		writeLen = int(rb.size) - pos
+	}
+	if writeLen > len(data) {
+		writeLen = len(data)
+	}
+	dst := rb.buf[pos : pos+writeLen]
+	copy(dst, data[:writeLen])
+	if pos+writeLen > rb.end {
+		rb.end = (pos + writeLen) % int(rb.size)
+	}
+	if rb.count < rb.size {
+		newCount := pos + writeLen
+		if newCount > int(rb.count) {
+			if newCount > int(rb.size) {
+				rb.count = rb.size
+				rb.start = (pos + writeLen - int(rb.size)) % int(rb.size)
+			} else {
+				rb.count = int64(newCount)
+			}
+		}
+	}
+	return writeLen, nil
+}
+
+// SliceByteRange extracts a byte range from the raw buffer as a string.
+func (rb *RingBuffer) SliceByteRange(start, end int) string {
+	if start < 0 {
+		start = 0
+	}
+	if end > int(rb.size) {
+		end = int(rb.size)
+	}
+	if start >= end {
+		return ""
+	}
+	return string(rb.buf[start:end])
+}
+
+// WriteBytesSegment writes a segment of bytes at the given offset.
+func (rb *RingBuffer) WriteBytesSegment(data []byte, offset int) (int, error) {
+	if offset < 0 {
+		offset = 0
+	}
+	maxWrite := int(rb.size) - offset
+	if maxWrite <= 0 {
+		return 0, nil
+	}
+	writeLen := len(data)
+	if writeLen > maxWrite {
+		writeLen = maxWrite
+	}
+	dst := rb.buf[offset : offset+writeLen]
+	copy(dst, data[:writeLen])
+	if offset+writeLen > rb.end {
+		rb.end = offset + writeLen
+	}
+	if int64(offset+writeLen) > rb.count {
+		if int64(offset+writeLen) > rb.size {
+			rb.count = rb.size
+			rb.start = (offset + writeLen - int(rb.size)) % int(rb.size)
+		} else {
+			rb.count = int64(offset + writeLen)
+		}
+	}
+	return writeLen, nil
+}
+
 // String returns the contents of the ring buffer as a string.
 func (rb *RingBuffer) String() string {
 	if rb.count == 0 {
