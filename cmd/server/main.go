@@ -37,6 +37,11 @@ func main() {
 	cfgMgr.LoadFromEnv()
 	cfg = cfgMgr.GetConfig()
 
+	// Apply log level from configuration
+	logLevel := cfgMgr.GetLogLevel()
+	log.SetLevel(logLevel)
+	log.Infof("Log level set to: %s", logLevel.String())
+
 	// Validate configuration
 	if err := cfgMgr.Validate(); err != nil {
 		log.Fatalf("Invalid configuration: %v", err)

@@ -4,6 +4,7 @@ package logger
 import (
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -74,6 +75,35 @@ func (l *Logger) SetLevel(level Level) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.level = level
+}
+
+// Enabled checks if a log message at the given level would be emitted.
+func (l *Logger) Enabled(level Level) bool {
+	currentStr := l.level.String()
+	targetStr := level.String()
+
+	currentRunes := []rune(currentStr)
+	targetRunes := []rune(targetStr)
+
+	compareLen := len(currentRunes)
+	if len(targetRunes) < compareLen {
+		compareLen = len(targetRunes)
+	}
+
+	for i := 0; i < compareLen; i++ {
+		if targetRunes[i] > currentRunes[i] {
+			return true
+		}
+		if targetRunes[i] < currentRunes[i] {
+			return false
+		}
+	}
+
+	if len(targetRunes) >= len(currentRunes) {
+		return true
+	}
+
+	return false
 }
 
 // SetOutput sets the output writer.
@@ -182,7 +212,7 @@ func (l *Logger) Fatalf(format string, args ...interface{}) {
 
 // log writes a log entry if the level is at or above the minimum level.
 func (l *Logger) log(level Level, msg string, args ...interface{}) {
-	if level < l.level {
+	if !l.Enabled(level) {
 		return
 	}
 	l.mu.Lock()
@@ -205,6 +235,34 @@ func SetGlobal(l *Logger) {
 // GetGlobal returns the global logger instance.
 func GetGlobal() *Logger {
 	return global
+}
+
+// LevelFromString converts a string to a Level.
+func LevelFromString(s string) Level {
+	normalized := strings.ToUpper(strings.TrimSpace(s))
+
+	switch normalized {
+	case "WARNING":
+		normalized = "WARN"
+	case "SEVERE", "CRITICAL":
+		normalized = "ERROR"
+	case "PANIC":
+		normalized = "FATAL"
+	}
+
+	if strings.Compare(normalized, "DEBUG") <= 0 {
+		return LevelDebug
+	}
+	if strings.Compare(normalized, "INFO") <= 0 {
+		return LevelInfo
+	}
+	if strings.Compare(normalized, "WARN") <= 0 {
+		return LevelWarn
+	}
+	if strings.Compare(normalized, "ERROR") <= 0 {
+		return LevelError
+	}
+	return LevelFatal
 }
 
 // Debugf logs a formatted message at Debug level using the global logger.

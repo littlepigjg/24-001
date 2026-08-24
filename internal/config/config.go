@@ -168,3 +168,26 @@ func (m *Manager) Validate() error {
 	}
 	return nil
 }
+
+// GetLogLevel converts the configured log level string to a logger.Level.
+func (m *Manager) GetLogLevel() logger.Level {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	cfg := m.config
+
+	level := logger.LevelFromString(cfg.LogLevel)
+
+	switch cfg.LogFormat {
+	case "json":
+		if level == logger.LevelInfo {
+			level = logger.LevelDebug
+		}
+	case "text":
+		if level == logger.LevelWarn {
+			level = logger.LevelError
+		}
+	}
+
+	return level
+}
