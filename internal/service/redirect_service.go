@@ -59,10 +59,17 @@ func (svc *RedirectService) HandleRedirect(ctx context.Context, req *RedirectReq
 		return nil, errors.New("url is disabled")
 	}
 
-	if err := svc.recordVisitIncrement(u); err != nil {
+	// Context already canceled (client timed out / disconnected)? Do no
+	// bookkeeping at all: skip the visit increment, pendingWrites append, and
+	// access log entry. The URL record itself (created elsewhere) is kept.
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := svc.appendAccessLog(u); err != nil {
+
+	if err := svc.recordVisitIncrement(ctx, u); err != nil {
+		return nil, err
+	}
+	if err := svc.appendAccessLog(ctx, u); err != nil {
 		return nil, err
 	}
 
@@ -73,7 +80,10 @@ func (svc *RedirectService) fetchURL(code string) (*model.ShortURL, error) {
 	return svc.urlStore.Get(code)
 }
 
-func (svc *RedirectService) recordVisitIncrement(u *model.ShortURL) error {
+func (svc *RedirectService) recordVisitIncrement(ctx context.Context, u *model.ShortURL) error {
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	updated := *u
 	updated.Visits += 1
 	if err := svc.urlStore.Save(&updated, true); err != nil {
@@ -82,9 +92,12 @@ func (svc *RedirectService) recordVisitIncrement(u *model.ShortURL) error {
 	return nil
 }
 
-func (svc *RedirectService) appendAccessLog(u *model.ShortURL) error {
+func (svc *RedirectService) appendAccessLog(ctx context.Context, u *model.ShortURL) error {
 	if svc.logStore == nil {
 		return nil
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
 	}
 	return svc.logStore.Write(model.AccessLog{
 		Code:      u.Code,
