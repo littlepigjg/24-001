@@ -44,7 +44,7 @@ func (s *URLService) Create(ctx context.Context, req *model.CreateReq) (*model.S
 	if code == "" {
 		generated, genErr := generateCode()
 		if genErr != nil {
-			return nil, errors.New("failed to generate short code")
+			return nil, fmt.Errorf("failed to generate short code: %w", genErr)
 		}
 		code = generated
 	}
@@ -60,7 +60,7 @@ func (s *URLService) Create(ctx context.Context, req *model.CreateReq) (*model.S
 	}
 
 	if err := s.store.Save(shortURL, false); err != nil {
-		return nil, errors.New("failed to create short URL")
+		return nil, fmt.Errorf("failed to create short URL: %w", err)
 	}
 
 	return shortURL, nil
@@ -69,7 +69,7 @@ func (s *URLService) Create(ctx context.Context, req *model.CreateReq) (*model.S
 func (s *URLService) Get(ctx context.Context, code string) (*model.ShortURL, error) {
 	u, err := s.store.Get(code)
 	if err != nil {
-		return nil, errors.New("failed to get short URL")
+		return nil, fmt.Errorf("failed to get short URL: %w", err)
 	}
 	return u, nil
 }
@@ -77,12 +77,12 @@ func (s *URLService) Get(ctx context.Context, code string) (*model.ShortURL, err
 func (s *URLService) Delete(ctx context.Context, code string) error {
 	u, err := s.store.Get(code)
 	if err != nil {
-		return errors.New("failed to find short URL for deletion")
+		return fmt.Errorf("failed to find short URL for deletion: %w", err)
 	}
 
 	u.Disabled = true
 	if err := s.store.Save(u, true); err != nil {
-		return errors.New("failed to delete short URL")
+		return fmt.Errorf("failed to delete short URL: %w", err)
 	}
 
 	return nil
@@ -91,7 +91,7 @@ func (s *URLService) Delete(ctx context.Context, code string) error {
 func (s *URLService) Update(ctx context.Context, code string, updates map[string]interface{}) (*model.ShortURL, error) {
 	u, err := s.store.Get(code)
 	if err != nil {
-		return nil, errors.New("failed to find short URL for update")
+		return nil, fmt.Errorf("failed to find short URL for update: %w", err)
 	}
 
 	if rawURL, ok := updates["raw_url"].(string); ok {
@@ -102,7 +102,7 @@ func (s *URLService) Update(ctx context.Context, code string, updates map[string
 	}
 
 	if err := s.store.Save(u, true); err != nil {
-		return nil, errors.New("failed to update short URL")
+		return nil, fmt.Errorf("failed to update short URL: %w", err)
 	}
 
 	return u, nil

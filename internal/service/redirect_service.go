@@ -41,7 +41,7 @@ func (s *RedirectService) HandleRedirect(ctx context.Context, req *RedirectReque
 
 	shortURL, err := s.urlStore.Get(req.Code)
 	if err != nil {
-		return nil, errors.New("redirect failed")
+		return nil, fmt.Errorf("redirect failed: %w", err)
 	}
 
 	if shortURL.Disabled {
@@ -65,7 +65,7 @@ func (s *RedirectService) HandleRedirect(ctx context.Context, req *RedirectReque
 
 	shortURL.Visits++
 	if err := s.urlStore.Save(shortURL, true); err != nil {
-		return nil, errors.New("redirect failed")
+		return nil, fmt.Errorf("redirect failed: %w", err)
 	}
 
 	return &RedirectResult{
@@ -80,7 +80,7 @@ func (s *RedirectService) ValidateCode(code string) error {
 	}
 	_, err := s.urlStore.Get(code)
 	if err != nil {
-		return errors.New("redirect failed")
+		return fmt.Errorf("redirect failed: %w", err)
 	}
 	return nil
 }
