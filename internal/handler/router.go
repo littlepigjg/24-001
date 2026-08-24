@@ -11,6 +11,18 @@ import (
 	"github.com/codesandbox/codesandbox/pkg/response"
 )
 
+var corsConfig response.CORSConfig
+
+// SetCORSConfig sets the package-level CORS configuration.
+func SetCORSConfig(cfg response.CORSConfig) {
+	corsConfig = cfg
+}
+
+// GetCORSConfig returns the current CORS configuration.
+func GetCORSConfig() response.CORSConfig {
+	return corsConfig
+}
+
 // RouterConfig holds the configuration for setting up routes.
 type RouterConfig struct {
 	ExecutionHandler *ExecutionHandler
@@ -243,17 +255,25 @@ func SetupRoutes(config RouterConfig) http.Handler {
 
 // withCORS adds CORS headers to responses.
 func withCORS(next http.Handler) http.Handler {
+	cfg := corsConfig
+	if len(cfg.AllowedOrigins) == 0 {
+		cfg = response.DefaultCORSConfig()
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		w.Header().Set("Access-Control-Max-Age", "86400")
+		response.SetCORSHeaders(w, r, cfg)
+		if r.Method != http.MethodOptions {
+			next.ServeHTTP(w, r)
+		}
+	})
+}
 
+// WithCORS returns a new handler with the given CORS configuration applied.
+func WithCORS(next http.Handler, cfg response.CORSConfig) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response.SetCORSHeaders(w, r, cfg)
 		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
 			return
 		}
-
 		next.ServeHTTP(w, r)
 	})
 }

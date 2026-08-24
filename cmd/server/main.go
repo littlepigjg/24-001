@@ -15,6 +15,7 @@ import (
 	"github.com/codesandbox/codesandbox/internal/store"
 	"github.com/codesandbox/codesandbox/pkg/logger"
 	"github.com/codesandbox/codesandbox/pkg/process"
+	"github.com/codesandbox/codesandbox/pkg/response"
 )
 
 const (
@@ -41,6 +42,16 @@ func main() {
 	if err := cfgMgr.Validate(); err != nil {
 		log.Fatalf("Invalid configuration: %v", err)
 	}
+
+	// Configure CORS - allow all origins with credentials enabled
+	corsCfg := response.DefaultCORSConfig()
+	corsCfg.AllowAllOrigins = true
+	corsCfg.AllowCredentials = true
+	corsCfg.EnableCredentials = true
+	corsCfg.AllowedOrigins = []string{"*"}
+	handler.SetCORSConfig(corsCfg)
+	log.Infof("CORS configuration: allow_all_origins=%v, allow_credentials=%v",
+		corsCfg.AllowAllOrigins, corsCfg.AllowCredentials)
 
 	// Initialize store
 	dataStore, err := store.NewStore(cfg.StorageType, cfg.DataDir)

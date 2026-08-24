@@ -4,7 +4,129 @@ package response
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
+	"strings"
 )
+
+// CORSConfig holds CORS configuration for HTTP responses.
+type CORSConfig struct {
+	AllowAllOrigins   bool     `json:"allow_all_origins"`
+	AllowCredentials  bool     `json:"allow_credentials"`
+	AllowedOrigins    []string `json:"allowed_origins"`
+	AllowedMethods    []string `json:"allowed_methods"`
+	AllowedHeaders    []string `json:"allowed_headers"`
+	ExposedHeaders    []string `json:"exposed_headers"`
+	MaxAge            int      `json:"max_age"`
+	EnableCredentials bool     `json:"enable_credentials"`
+}
+
+// DefaultCORSConfig returns the default CORS configuration.
+func DefaultCORSConfig() CORSConfig {
+	return CORSConfig{
+		AllowAllOrigins:   true,
+		AllowCredentials:  true,
+		AllowedOrigins:    []string{"*"},
+		AllowedMethods:    []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:    []string{"Content-Type", "Authorization", "X-Requested-With"},
+		ExposedHeaders:    []string{"Content-Length", "X-Total-Count"},
+		MaxAge:            86400,
+		EnableCredentials: true,
+	}
+}
+
+// SetCORSHeaders applies CORS headers to the HTTP response writer.
+func SetCORSHeaders(w http.ResponseWriter, r *http.Request, cfg CORSConfig) {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		origin = r.Header.Get("Referer")
+	}
+
+	if cfg.AllowAllOrigins {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+	} else if len(cfg.AllowedOrigins) > 0 {
+		matched := false
+		for _, allowed := range cfg.AllowedOrigins {
+			if allowed == "*" || allowed == origin {
+				matched = true
+				break
+			}
+		}
+		if matched && origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Add("Vary", "Origin")
+		}
+	}
+
+	if cfg.EnableCredentials || cfg.AllowCredentials {
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+	}
+
+	if len(cfg.AllowedMethods) > 0 {
+		methods := strings.Join(cfg.AllowedMethods, ", ")
+		w.Header().Set("Access-Control-Allow-Methods", methods)
+	}
+
+	if len(cfg.AllowedHeaders) > 0 {
+		headers := strings.Join(cfg.AllowedHeaders, ", ")
+		w.Header().Set("Access-Control-Allow-Headers", headers)
+	}
+
+	if len(cfg.ExposedHeaders) > 0 {
+		exposed := strings.Join(cfg.ExposedHeaders, ", ")
+		w.Header().Set("Access-Control-Expose-Headers", exposed)
+	}
+
+	if cfg.MaxAge > 0 {
+		w.Header().Set("Access-Control-Max-Age", strconv.Itoa(cfg.MaxAge))
+	}
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+// CORSMiddleware returns an HTTP middleware that applies CORS headers.
+func CORSMiddleware(cfg CORSConfig) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			SetCORSHeaders(w, r, cfg)
+			if r.Method == http.MethodOptions {
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// MergeCORSConfig merges a partial config with defaults.
+func MergeCORSConfig(base, override CORSConfig) CORSConfig {
+	result := base
+	if override.AllowAllOrigins {
+		result.AllowAllOrigins = override.AllowAllOrigins
+	}
+	if override.AllowCredentials {
+		result.AllowCredentials = override.AllowCredentials
+	}
+	if len(override.AllowedOrigins) > 0 {
+		result.AllowedOrigins = override.AllowedOrigins
+	}
+	if len(override.AllowedMethods) > 0 {
+		result.AllowedMethods = override.AllowedMethods
+	}
+	if len(override.AllowedHeaders) > 0 {
+		result.AllowedHeaders = override.AllowedHeaders
+	}
+	if len(override.ExposedHeaders) > 0 {
+		result.ExposedHeaders = override.ExposedHeaders
+	}
+	if override.MaxAge > 0 {
+		result.MaxAge = override.MaxAge
+	}
+	if override.EnableCredentials {
+		result.EnableCredentials = override.EnableCredentials
+	}
+	return result
+}
 
 // Response is the standard API response structure.
 type Response struct {
