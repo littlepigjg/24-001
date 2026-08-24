@@ -157,6 +157,16 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 		err = fmt.Errorf("unsupported language: %s", exec.Language)
 	}
 
+	// Check if shutdown was triggered during execution
+	if s.executor.RunnerAccess().IsShutdownTriggered() {
+		s.logger.Warnf("Execution %s was interrupted by shutdown, skipping result save", exec.ID)
+		exec.Status = model.StatusCanceled
+		exec.ErrorMessage = "execution interrupted by server shutdown"
+		now := time.Now()
+		exec.CompletedAt = &now
+		return
+	}
+
 	// Update execution with result
 	if err != nil {
 		exec.Status = model.StatusFailed
@@ -267,6 +277,55 @@ func (s *ExecutionService) WaitForCompletion(timeout time.Duration) error {
 		return nil
 	case <-time.After(timeout):
 		return fmt.Errorf("timeout waiting for executions to complete")
+	}
+}
+
+// Shutdown gracefully shuts down the execution service.
+// BUG: Kills processes first, then waits for goroutines. This causes
+// data loss because goroutines detect IsShutdownTriggered() and skip
+// saving results after processes are killed.
+// A proper implementation should wait for goroutines first, then kill
+// only the remaining processes that didn't finish in time.
+func (s *ExecutionService) Shutdown(timeout time.Duration) error {
+	s.logger.Infof("Shutting down execution service...")
+
+	sdCtx, sdCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer sdCancel()
+
+	// BUG: Kill processes BEFORE waiting for goroutines to save results
+	if err := s.executor.Shutdown(sdCtx); err != nil {
+		s.logger.Warnf("Error during process shutdown: %v", err)
+	}
+
+	// Now wait for goroutines - but they already detected shutdown and skipped saves
+	s.logger.Infof("Waiting %v for goroutines to finish...", timeout)
+	if err := s.WaitForCompletion(timeout); err != nil {
+		s.logger.Warnf("WaitForCompletion timed out or failed: %v", err)
+		return err
+	}
+
+	s.logger.Infof("Execution service shut down successfully")
+	return nil
+}
+
+// ShutdownWithCancelContext performs shutdown and returns whether all goroutines completed.
+func (s *ExecutionService) ShutdownWithCancelContext(timeout time.Duration) bool {
+	sdCtx, sdCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer sdCancel()
+
+	_ = s.executor.Shutdown(sdCtx)
+
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
 	}
 }
 

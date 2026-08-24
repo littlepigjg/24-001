@@ -28,6 +28,21 @@ func NewExecutor() *Executor {
 	}
 }
 
+// Shutdown triggers shutdown on the underlying runner, killing all running processes.
+func (e *Executor) Shutdown(ctx context.Context) error {
+	return e.runner.Shutdown(ctx)
+}
+
+// ActiveProcesses returns the number of currently running processes.
+func (e *Executor) ActiveProcesses() int {
+	return e.runner.ActiveProcesses()
+}
+
+// RunnerAccess returns the underlying runner for advanced operations.
+func (e *Executor) RunnerAccess() *Runner {
+	return e.runner
+}
+
 // ExecuteOptions configures code execution.
 type ExecuteOptions struct {
 	// Timeout is the maximum execution time.

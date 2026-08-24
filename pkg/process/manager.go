@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -41,6 +42,10 @@ type Runner struct {
 	mu sync.RWMutex
 	// running tracks currently running processes.
 	running map[string]*exec.Cmd
+	// shutdownCh signals that shutdown has been triggered.
+	shutdownCh chan struct{}
+	// shutdownOnce ensures shutdown is only triggered once.
+	shutdownOnce sync.Once
 }
 
 // NewRunner creates a new process Runner with default settings.
@@ -49,6 +54,7 @@ func NewRunner() *Runner {
 		DefaultTimeout: 30 * time.Second,
 		MaxOutputSize:  10 * 1024 * 1024, // 10MB
 		running:        make(map[string]*exec.Cmd),
+		shutdownCh:     make(chan struct{}),
 	}
 }
 
@@ -74,6 +80,11 @@ func (r *Runner) RunWithTimeout(ctx context.Context, timeout time.Duration, name
 	// Set environment
 	if r.Env != nil {
 		cmd.Env = r.Env
+	}
+
+	// Create a new process group so we can kill all children during shutdown
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
 	}
 
 	// Capture output
@@ -148,6 +159,11 @@ func (r *Runner) RunWithStdinTimeout(ctx context.Context, stdin string, timeout 
 		cmd.Env = r.Env
 	}
 
+	// Create a new process group so we can kill all children during shutdown
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+	}
+
 	cmd.Stdin = strings.NewReader(stdin)
 
 	var stdoutBuf, stderrBuf bytes.Buffer
@@ -201,6 +217,50 @@ func (r *Runner) ActiveProcesses() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return len(r.running)
+}
+
+// Shutdown triggers graceful shutdown of all running processes.
+// It sends a kill signal to all running commands but does NOT wait
+// for them to fully terminate.
+func (r *Runner) Shutdown(ctx context.Context) error {
+	r.shutdownOnce.Do(func() {
+		close(r.shutdownCh)
+	})
+
+	r.mu.RLock()
+	cmds := make([]*exec.Cmd, 0, len(r.running))
+	for _, cmd := range r.running {
+		cmds = append(cmds, cmd)
+	}
+	r.mu.RUnlock()
+
+	// Kill the entire process group to ensure all child processes are killed
+	for _, cmd := range cmds {
+		if cmd.Process != nil {
+			processGroupID := -cmd.Process.Pid
+			if err := syscall.Kill(processGroupID, syscall.SIGKILL); err != nil {
+				// Fallback: try killing just the parent process
+				_ = cmd.Process.Kill()
+			}
+		}
+	}
+
+	return nil
+}
+
+// IsShutdownTriggered returns whether shutdown has been triggered.
+func (r *Runner) IsShutdownTriggered() bool {
+	select {
+	case <-r.shutdownCh:
+		return true
+	default:
+		return false
+	}
+}
+
+// ShutdownChannel returns the shutdown signal channel for external coordination.
+func (r *Runner) ShutdownChannel() <-chan struct{} {
+	return r.shutdownCh
 }
 
 // LimitedWriter is an io.Writer that limits the total bytes written.

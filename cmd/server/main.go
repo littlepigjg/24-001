@@ -136,10 +136,10 @@ func main() {
 		log.Errorf("Server shutdown error: %v", err)
 	}
 
-	// Wait for running executions to complete
-	log.Info("Waiting for executions to complete...")
-	if err := execSvc.WaitForCompletion(10 * time.Second); err != nil {
-		log.Warnf("Timeout waiting for executions: %v", err)
+	// Shut down execution service - kills processes first, then waits
+	// BUG: The short timeout means goroutines may not have time to save results
+	if err := execSvc.Shutdown(500 * time.Millisecond); err != nil {
+		log.Warnf("Execution service shutdown warning: %v", err)
 	}
 
 	// Cleanup
