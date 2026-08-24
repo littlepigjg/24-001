@@ -26,6 +26,12 @@ func (r *CreateReq) Validate() error {
 			return ErrInvalidCodeChars
 		}
 	}
+	// A non-positive MaxVisits means "no limit". Normalize negative values
+	// (e.g. -1) to 0 so downstream paging/comparison logic never sees a
+	// negative number that could slice out of bounds.
+	if r.MaxVisits < 0 {
+		r.MaxVisits = 0
+	}
 	return nil
 }
 
@@ -47,6 +53,11 @@ func (s *ShortURL) Validate() error {
 	if strings.TrimSpace(s.RawURL) == "" {
 		return ErrEmptyURL
 	}
+	// Defensively normalize a negative MaxVisits (e.g. from legacy data on
+	// disk) to "unlimited" so it can never reach paging logic downstream.
+	if s.MaxVisits < 0 {
+		s.MaxVisits = 0
+	}
 	return nil
 }
 
@@ -67,11 +78,11 @@ func isValidCode(code string) bool {
 }
 
 var (
-	ErrEmptyURL         = &ValidationError{Field: "raw_url", Message: "raw_url must not be empty"}
-	ErrURLTooLong       = &ValidationError{Field: "raw_url", Message: "raw_url exceeds 2048 characters"}
+	ErrEmptyURL          = &ValidationError{Field: "raw_url", Message: "raw_url must not be empty"}
+	ErrURLTooLong        = &ValidationError{Field: "raw_url", Message: "raw_url exceeds 2048 characters"}
 	ErrInvalidCodeLength = &ValidationError{Field: "custom_code", Message: "custom_code must be 4-32 characters"}
-	ErrInvalidCodeChars = &ValidationError{Field: "custom_code", Message: "custom_code contains invalid characters"}
-	ErrEmptyCode        = &ValidationError{Field: "code", Message: "code must not be empty"}
+	ErrInvalidCodeChars  = &ValidationError{Field: "custom_code", Message: "custom_code contains invalid characters"}
+	ErrEmptyCode         = &ValidationError{Field: "code", Message: "code must not be empty"}
 )
 
 type ValidationError struct {

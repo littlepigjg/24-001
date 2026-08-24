@@ -73,7 +73,7 @@ func (s *URLService) List(ctx context.Context, page, pageSize int) ([]model.Shor
 	if page <= 0 {
 		page = 1
 	}
-	if pageSize == 0 {
+	if pageSize <= 0 {
 		pageSize = 100
 	}
 	return s.listWithPagination(page, pageSize)
@@ -87,12 +87,18 @@ func (s *URLService) listWithPagination(page, pageSize int) ([]model.ShortURL, e
 	}
 
 	start := (page - 1) * pageSize
-	end := start + pageSize
+	if start < 0 {
+		start = 0
+	}
 	if start >= len(codes) {
 		return nil, nil
 	}
+	end := start + pageSize
 	if end > len(codes) {
 		end = len(codes)
+	}
+	if end < start {
+		end = start
 	}
 	pageCodes := codes[start:end]
 
@@ -174,6 +180,9 @@ func (r *RedirectService) HandleRedirect(ctx context.Context, req *RedirectReque
 		}, nil
 	}
 
+	// A non-positive MaxVisits means "unlimited visits". Only enforce a limit
+	// when MaxVisits is explicitly positive. This keeps redirects on URLs
+	// created with MaxVisits <= 0 (e.g. -1 for "no limit") from crashing.
 	if u.MaxVisits > 0 && u.Visits >= u.MaxVisits {
 		return &RedirectResult{
 			RawURL: "",
@@ -194,7 +203,10 @@ func (r *RedirectService) HandleRedirect(ctx context.Context, req *RedirectReque
 		return nil, fmt.Errorf("failed to write access log: %w", err)
 	}
 
-	records, logErr := r.ls.List(1, u.MaxVisits)
+	// List the most recent access log entries. Never pass MaxVisits as the
+	// page size: a negative MaxVisits would slice out of bounds and panic.
+	// Use a small, safe page size instead. The result is currently unused.
+	records, logErr := r.ls.List(1, recentAccessLogPageSize)
 	if logErr != nil {
 		return nil, fmt.Errorf("failed to list access logs: %w", logErr)
 	}
@@ -205,3 +217,8 @@ func (r *RedirectService) HandleRedirect(ctx context.Context, req *RedirectReque
 		Status: 302,
 	}, nil
 }
+
+// recentAccessLogPageSize is the page size used when reading the access log
+// after a redirect. It is intentionally small and positive so that negative
+// MaxVisits values on a ShortURL can never reach the store's pagination logic.
+const recentAccessLogPageSize = 100
