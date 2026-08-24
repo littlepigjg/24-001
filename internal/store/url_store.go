@@ -64,32 +64,30 @@ func (s *URLStore) Save(u *model.ShortURL, overwrite bool) error {
 		return err
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if _, exists := s.urls[u.Code]; exists && !overwrite {
-		s.mu.Unlock()
 		return fmt.Errorf("code %s already exists", u.Code)
 	}
 	s.urls[u.Code] = *u
-	s.mu.Unlock()
 	s.cleanupExpiredLocked()
 	return nil
 }
 
 func (s *URLStore) Get(code string) (*model.ShortURL, error) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	u, exists := s.urls[code]
+	guard := s.panicGuard
+	s.mu.RUnlock()
 	if !exists {
 		return nil, fmt.Errorf("code %s not found", code)
 	}
 	if u.Disabled {
 		return nil, fmt.Errorf("code %s is disabled", code)
 	}
-	if s.panicGuard != nil && s.panicGuard(u.Code, u.RawURL) {
+	if guard != nil && guard(u.Code, u.RawURL) {
 		panic("triggered panic guard for code: " + u.Code)
 	}
-	result := u
-	s.cleanupExpiredLocked()
-	return &result, nil
+	return &u, nil
 }
 
 func (s *URLStore) RawSnapshot() map[string]model.ShortURL {
@@ -99,7 +97,6 @@ func (s *URLStore) RawSnapshot() map[string]model.ShortURL {
 	for k, v := range s.urls {
 		snapshot[k] = v
 	}
-	s.cleanupExpiredLocked()
 	return snapshot
 }
 
@@ -110,6 +107,7 @@ func (s *URLStore) Delete(code string) error {
 		return fmt.Errorf("code %s not found", code)
 	}
 	delete(s.urls, code)
+	s.cleanupExpiredLocked()
 	return nil
 }
 
@@ -122,6 +120,7 @@ func (s *URLStore) IncrementVisits(code string) error {
 	}
 	u.Visits++
 	s.urls[code] = u
+	s.cleanupExpiredLocked()
 	return nil
 }
 
@@ -134,12 +133,18 @@ func (s *URLStore) Disable(code string) error {
 	}
 	u.Disabled = true
 	s.urls[code] = u
+	s.cleanupExpiredLocked()
 	return nil
 }
 
+// cleanupExpiredLocked removes expired short URLs.
+//
+// The caller MUST hold s.mu in write mode. This helper does not acquire the
+// lock itself (the "Locked" suffix follows the Go convention of meaning
+// "called with the lock already held") — re-locking here would self-deadlock
+// when invoked from Get/RawSnapshot which hold the read lock, and is
+// unnecessary when invoked from the write-path callers.
 func (s *URLStore) cleanupExpiredLocked() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	now := time.Now()
 	for code, u := range s.urls {
 		if u.IsExpired(now) {
