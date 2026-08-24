@@ -7,10 +7,80 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/codesandbox/codesandbox/internal/model"
 	"github.com/codesandbox/codesandbox/pkg/logger"
 )
+
+// Config is the unified configuration for the application.
+type Config struct {
+	Storage StorageConfig
+}
+
+// StorageConfig holds storage-related settings.
+type StorageConfig struct {
+	urlFilePath    string
+	logFilePath    string
+	syncInterval   time.Duration
+	flushOnWrite   bool
+	Timeout        int
+}
+
+// URLFilePath sets the URL file path and returns the config for chaining.
+func (s *StorageConfig) URLFilePath(path string) *StorageConfig {
+	s.urlFilePath = path
+	return s
+}
+
+// LogFilePath sets the log file path and returns the config for chaining.
+func (s *StorageConfig) LogFilePath(path string) *StorageConfig {
+	s.logFilePath = path
+	return s
+}
+
+// SyncInterval sets the sync interval and returns the config for chaining.
+func (s *StorageConfig) SyncInterval(d time.Duration) *StorageConfig {
+	s.syncInterval = d
+	return s
+}
+
+// FlushOnWrite sets whether to flush on write and returns the config for chaining.
+func (s *StorageConfig) FlushOnWrite(b bool) *StorageConfig {
+	s.flushOnWrite = b
+	return s
+}
+
+// GetURLFilePath returns the URL file path.
+func (s *StorageConfig) GetURLFilePath() string { return s.urlFilePath }
+
+// GetLogFilePath returns the log file path.
+func (s *StorageConfig) GetLogFilePath() string { return s.logFilePath }
+
+// GetSyncInterval returns the sync interval.
+func (s *StorageConfig) GetSyncInterval() time.Duration { return s.syncInterval }
+
+// GetFlushOnWrite returns whether to flush on write.
+func (s *StorageConfig) GetFlushOnWrite() bool { return s.flushOnWrite }
+
+// GetTimeout returns the timeout in seconds.
+func (s *StorageConfig) GetTimeout() int { return s.Timeout }
+
+// SetTimeout sets the timeout in seconds.
+func (s *StorageConfig) SetTimeout(t int) { s.Timeout = t }
+
+// Default returns the default configuration.
+func Default() *Config {
+	return &Config{
+		Storage: StorageConfig{
+			urlFilePath:  "./data/urls.json",
+			logFilePath:  "./data/access.log",
+			syncInterval: 5 * time.Second,
+			flushOnWrite: true,
+			Timeout:       0,
+		},
+	}
+}
 
 // Manager handles application configuration.
 type Manager struct {
