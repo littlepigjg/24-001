@@ -132,7 +132,10 @@ func writeResponse(w http.ResponseWriter, statusCode int, resp Response) {
 }
 
 // DecodeJSONBody reads and decodes a JSON request body into the given value.
+// It fully drains and closes the request body so the underlying keep-alive
+// connection can be reused by the server.
 func DecodeJSONBody(r *http.Request, v interface{}) error {
+	defer r.Body.Close()
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return fmt.Errorf("failed to read request body: %w", err)
@@ -146,8 +149,24 @@ func DecodeJSONBody(r *http.Request, v interface{}) error {
 	return nil
 }
 
+// CloseRequestBody drains and closes the request body so that the underlying
+// keep-alive connection can be reused. It must be called on every request that
+// carries a body, including error paths where the body was only partially or
+// never read. It is safe to call when r.Body is nil.
+func CloseRequestBody(r *http.Request) {
+	if r.Body == nil {
+		return
+	}
+	// Drain any remaining bytes so the connection is in a reusable state.
+	_, _ = io.Copy(io.Discard, r.Body)
+	_ = r.Body.Close()
+}
+
 // ValidateRequestBody checks the request body for basic validity before parsing.
+// It fully drains and closes the request body so the underlying keep-alive
+// connection can be reused by the server.
 func ValidateRequestBody(r *http.Request) ([]byte, error) {
+	defer r.Body.Close()
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read request body for validation: %w", err)

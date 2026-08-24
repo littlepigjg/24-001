@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -37,8 +36,10 @@ func (h *ValidateHandler) Validate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	defer response.CloseRequestBody(r)
+
 	var req ValidateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := response.DecodeJSONBody(r, &req); err != nil {
 		response.BadRequest(w, fmt.Sprintf("invalid request body: %v", err))
 		return
 	}
