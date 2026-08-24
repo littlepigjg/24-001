@@ -2,6 +2,7 @@
 package fileutil
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,6 +121,22 @@ func ReadFileContent(path string) (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+// ReadJSONFile reads a JSON file and unmarshals it into the target.
+// Returns false if the file does not exist (target not modified).
+func ReadJSONFile(path string, target interface{}) (bool, error) {
+	if !FileExists(path) {
+		return false, nil
+	}
+	data, err := ReadFileContent(path)
+	if err != nil {
+		return false, err
+	}
+	if err := json.Unmarshal([]byte(data), target); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // WriteFileContent writes content to a file.
