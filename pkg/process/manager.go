@@ -25,6 +25,13 @@ func (r *Result) IsSuccess() bool {
 	return r.ExitCode == 0 && !r.TimedOut && !r.Killed
 }
 
+// ExitCodeOutputOverflow is a sentinel exit code indicating the process output
+// exceeded the configured capture limit (MaxOutputSize) and was truncated.
+// It is deliberately distinct from real program exit codes (0-255) and from
+// the -1 sentinel used for timeouts, kills, and execution failures, so callers
+// can surface truncation explicitly instead of masking it as a successful run.
+const ExitCodeOutputOverflow = -2
+
 // Runner manages process execution with resource limits.
 type Runner struct {
 	// DefaultTimeout is the default timeout for process execution.
@@ -103,8 +110,13 @@ func (r *Runner) RunWithTimeout(ctx context.Context, timeout time.Duration, name
 		Duration: duration,
 	}
 
+	// The output exceeded the capture limit: the buffers were truncated to
+	// their first MaxOutputSize bytes. Report this as a non-success outcome
+	// (sentinel exit code) rather than masking it as a clean exit-code 0 run,
+	// so callers do not mistake partial output for a complete result. The
+	// truncated stdout/stderr captured so far is preserved for the caller.
 	if outputCapture.HasOverflowed() {
-		result.ExitCode = 0
+		result.ExitCode = ExitCodeOutputOverflow
 		return result, nil
 	}
 
@@ -175,8 +187,13 @@ func (r *Runner) RunWithStdinTimeout(ctx context.Context, stdin string, timeout 
 		Duration: duration,
 	}
 
+	// The output exceeded the capture limit: the buffers were truncated to
+	// their first MaxOutputSize bytes. Report this as a non-success outcome
+	// (sentinel exit code) rather than masking it as a clean exit-code 0 run,
+	// so callers do not mistake partial output for a complete result. The
+	// truncated stdout/stderr captured so far is preserved for the caller.
 	if outputCapture.HasOverflowed() {
-		result.ExitCode = 0
+		result.ExitCode = ExitCodeOutputOverflow
 		return result, nil
 	}
 
