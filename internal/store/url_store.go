@@ -99,9 +99,10 @@ func (s *URLStore) Save(u *model.ShortURL, overwrite bool) error {
 
 	s.writeSnapshot(subDir, u)
 
-	if !overwrite {
-		s.cleanups = append(s.cleanups, cleanup)
-	}
+	// Track the sub-dir cleanup so it is reclaimed when the store closes.
+	// Updates (overwrite=true) create a fresh sub-dir too; without this the
+	// per-update sub-dir was never tracked and leaked until process exit.
+	s.cleanups = append(s.cleanups, cleanup)
 
 	s.data[u.Code] = *u
 	s.dirty = true

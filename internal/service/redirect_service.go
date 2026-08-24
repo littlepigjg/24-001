@@ -68,6 +68,11 @@ func (svc *RedirectService) HandleRedirect(ctx context.Context, req *model.Redir
 	if err != nil {
 		return result, fmt.Errorf("failed to create redirect log dir: %w", err)
 	}
+	// The redirect-<code>- dir is a per-redirect scratch space and must be
+	// reclaimed once the redirect is handled. Run cleanup on every return
+	// path so subsequent redirects for the same code do not accumulate dirs
+	// (previously only the first redirect cleaned it).
+	defer cleanup()
 
 	svc.writeRedirectLog(logDir, req, u)
 
@@ -81,7 +86,6 @@ func (svc *RedirectService) HandleRedirect(ctx context.Context, req *model.Redir
 		if flushErr != nil {
 			return result, fmt.Errorf("flush failed: %w", flushErr)
 		}
-		cleanup()
 	}
 
 	result.RawURL = u.RawURL

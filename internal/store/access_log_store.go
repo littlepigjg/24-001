@@ -80,8 +80,15 @@ func (s *AccessLogStore) Close() error {
 		defer s.mu.Unlock()
 		if s.logFile != nil {
 			s.logFile.Close()
+			s.logFile = nil
 		}
 		s.opened = false
+		// Reclaim the accesslog-data- temp root so it does not outlive the
+		// process. Run unconditionally; os.RemoveAll is a no-op if the dir
+		// was already removed or never created.
+		if s.cleanup != nil {
+			s.cleanup()
+		}
 	})
 	return nil
 }
