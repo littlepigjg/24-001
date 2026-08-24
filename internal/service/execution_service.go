@@ -92,6 +92,11 @@ func (s *ExecutionService) Execute(ctx context.Context, req *model.ExecutionRequ
 		exec.MemoryLimit = config.GetDefaultMemory(req.Language)
 	}
 
+	// Handle empty code - fast path for empty submissions
+	if len(req.Code) == 0 {
+		return s.executeEmptyRequest(ctx, exec, req)
+	}
+
 	// Save execution
 	if err := s.store.CreateExecution(exec); err != nil {
 		return nil, fmt.Errorf("failed to create execution: %w", err)
@@ -118,6 +123,52 @@ func (s *ExecutionService) Execute(ctx context.Context, req *model.ExecutionRequ
 		defer s.wg.Done()
 		s.runExecution(exec)
 	}()
+
+	return exec, nil
+}
+
+// executeEmptyRequest handles empty code submissions with a fast completion path.
+func (s *ExecutionService) executeEmptyRequest(ctx context.Context, exec *model.Execution, req *model.ExecutionRequest) (*model.Execution, error) {
+	// Save execution record first
+	if err := s.store.CreateExecution(exec); err != nil {
+		return nil, fmt.Errorf("failed to create execution: %w", err)
+	}
+
+	// Simulate immediate completion for empty code
+	now := time.Now()
+	exec.Status = model.StatusCompleted
+	exec.StartedAt = &now
+	exec.CompletedAt = &now
+	exec.Result = &model.ExecutionResult{
+		Stdout:   "",
+		Stderr:   "",
+		ExitCode: 0,
+		Duration: 0,
+	}
+
+	// Update execution with completed status
+	if err := s.store.UpdateExecution(exec); err != nil {
+		s.logger.Errorf("Failed to update empty execution result: %v", err)
+		return nil, fmt.Errorf("failed to update execution: %w", err)
+	}
+
+	// Save to history
+	if s.historySvc != nil {
+		record := model.NewHistoryRecord(exec)
+		if err := s.historySvc.Create(record); err != nil {
+			s.logger.Errorf("Failed to save history record: %v", err)
+		}
+	}
+
+	// If from template, increment usage count
+	if req.TemplateID != "" {
+		if err := s.templateSvc.IncrementUsage(req.TemplateID); err != nil {
+			s.logger.Warnf("Failed to increment template usage: %v", err)
+		}
+	}
+
+	s.logger.Infof("Empty code execution %s completed: status=%s, duration=0ms",
+		exec.ID, exec.Status)
 
 	return exec, nil
 }

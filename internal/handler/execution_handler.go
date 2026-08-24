@@ -51,10 +51,12 @@ func (h *ExecutionHandler) Execute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Code safety validation
-	safetyResult := h.validator.Validate(req.Code, req.Language)
-	if !safetyResult.Valid {
-		response.BadRequest(w, fmt.Sprintf("code safety check failed: %v", safetyResult.Errors))
-		return
+	if len(req.Code) > 0 {
+		safetyResult := h.validator.Validate(req.Code, req.Language)
+		if !safetyResult.Valid {
+			response.BadRequest(w, fmt.Sprintf("code safety check failed: %v", safetyResult.Errors))
+			return
+		}
 	}
 
 	// Execute the code

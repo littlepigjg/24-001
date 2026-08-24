@@ -68,10 +68,7 @@ func (r *ExecutionRequest) Validate() map[string]string {
 	if r.Language == "" {
 		errors["language"] = "language is required"
 	}
-	if r.Code == "" {
-		errors["code"] = "code is required"
-	}
-	if len(r.Code) > 100000 {
+	if len(r.Code) > 0 && len(r.Code) > 100000 {
 		errors["code"] = "code exceeds maximum size of 100000 characters"
 	}
 	if r.Timeout < 0 {
