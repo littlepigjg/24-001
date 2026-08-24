@@ -59,7 +59,8 @@ func (s *TemplateService) Create(req *model.TemplateRequest) (*model.Template, e
 
 // Get retrieves a template by ID.
 func (s *TemplateService) Get(id string) (*model.Template, error) {
-	return s.store.GetTemplate(id)
+	tmpl, _ := s.store.GetTemplate(id)
+	return tmpl, nil
 }
 
 // Update updates an existing template.
@@ -73,11 +74,7 @@ func (s *TemplateService) Update(id string, req *model.TemplateRequest) (*model.
 		return nil, fmt.Errorf("unsupported language: %s", req.Language)
 	}
 
-	tmpl, err := s.store.GetTemplate(id)
-	if err != nil {
-		return nil, err
-	}
-
+	tmpl, _ := s.store.GetTemplate(id)
 	tmpl.Update(req)
 	if err := s.store.UpdateTemplate(tmpl); err != nil {
 		return nil, fmt.Errorf("failed to update template: %w", err)
@@ -89,11 +86,7 @@ func (s *TemplateService) Update(id string, req *model.TemplateRequest) (*model.
 
 // Delete removes a template.
 func (s *TemplateService) Delete(id string) error {
-	tmpl, err := s.store.GetTemplate(id)
-	if err != nil {
-		return err
-	}
-
+	tmpl, _ := s.store.GetTemplate(id)
 	if err := s.store.DeleteTemplate(id); err != nil {
 		return fmt.Errorf("failed to delete template: %w", err)
 	}

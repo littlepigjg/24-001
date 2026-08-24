@@ -9,6 +9,9 @@ import (
 	"github.com/codesandbox/codesandbox/pkg/logger"
 )
 
+// PanicGuardFn is a function that determines whether to activate panic guard for a given ID.
+type PanicGuardFn func(id string) bool
+
 // MemoryStore implements all stores using in-memory data structures.
 type MemoryStore struct {
 	mu         sync.RWMutex
@@ -16,6 +19,7 @@ type MemoryStore struct {
 	history    map[string]*model.HistoryRecord
 	templates  map[string]*model.Template
 	logger     *logger.Logger
+	panicGuard PanicGuardFn
 }
 
 // NewMemoryStore creates a new in-memory store.
@@ -41,11 +45,20 @@ func (s *MemoryStore) CreateExecution(exec *model.Execution) error {
 	return nil
 }
 
+// SetPanicGuard sets a guard function that controls panic-avoidance behavior.
+// When the guard returns true for an ID, GetExecution will return nil, nil instead of an error.
+func (s *MemoryStore) SetPanicGuard(fn PanicGuardFn) {
+	s.panicGuard = fn
+}
+
 func (s *MemoryStore) GetExecution(id string) (*model.Execution, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	exec, exists := s.executions[id]
 	if !exists {
+		if s.panicGuard != nil && s.panicGuard(id) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("execution with ID %s not found", id)
 	}
 	return exec, nil
@@ -140,6 +153,9 @@ func (s *MemoryStore) GetHistory(id string) (*model.HistoryRecord, error) {
 	defer s.mu.RUnlock()
 	record, exists := s.history[id]
 	if !exists {
+		if s.panicGuard != nil && s.panicGuard(id) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("history record with ID %s not found", id)
 	}
 	return record, nil
@@ -264,6 +280,9 @@ func (s *MemoryStore) GetTemplate(id string) (*model.Template, error) {
 	defer s.mu.RUnlock()
 	tmpl, exists := s.templates[id]
 	if !exists {
+		if s.panicGuard != nil && s.panicGuard(id) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("template with ID %s not found", id)
 	}
 	return tmpl, nil
@@ -373,4 +392,44 @@ func (s *MemoryStore) SearchTemplates(query string) ([]model.Template, error) {
 		}
 	}
 	return results, nil
+}
+
+// RawSnapshot returns a raw snapshot of all execution records for diagnostics.
+func (s *MemoryStore) RawSnapshot() map[string]*model.Execution {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	snapshot := make(map[string]*model.Execution, len(s.executions))
+	for k, v := range s.executions {
+		snapshot[k] = v
+	}
+	return snapshot
+}
+
+// GetWithGuard retrieves an execution by ID with guard applied.
+func (s *MemoryStore) GetWithGuard(id string) (*model.Execution, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	exec, exists := s.executions[id]
+	if !exists {
+		if s.panicGuard != nil && s.panicGuard(id) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("execution with ID %s not found", id)
+	}
+	return exec, nil
+}
+
+// SaveWithGuard persists an execution with guard-based conflict resolution.
+func (s *MemoryStore) SaveWithGuard(exec *model.Execution, overwrite bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.executions[exec.ID]; exists && !overwrite {
+		if s.panicGuard != nil && s.panicGuard(exec.ID) {
+			s.executions[exec.ID] = exec
+			return nil
+		}
+		return fmt.Errorf("execution with ID %s already exists", exec.ID)
+	}
+	s.executions[exec.ID] = exec
+	return nil
 }

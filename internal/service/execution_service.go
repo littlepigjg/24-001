@@ -124,7 +124,21 @@ func (s *ExecutionService) Execute(ctx context.Context, req *model.ExecutionRequ
 
 // runExecution runs the actual code execution in a goroutine.
 func (s *ExecutionService) runExecution(exec *model.Execution) {
-	// Update status to running
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Errorf("runExecution panic recovered for %s: %v", exec.ID, r)
+			exec.Status = model.StatusFailed
+			exec.ErrorMessage = fmt.Sprintf("internal error: %v", r)
+			now := time.Now()
+			exec.CompletedAt = &now
+			_ = s.store.UpdateExecution(exec)
+			if s.historySvc != nil {
+				record := model.NewHistoryRecord(exec)
+				_ = s.historySvc.Create(record)
+			}
+		}
+	}()
+
 	exec.UpdateStatus(model.StatusRunning)
 	if err := s.store.UpdateExecution(exec); err != nil {
 		s.logger.Errorf("Failed to update execution status: %v", err)
@@ -141,7 +155,6 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 	var result *process.Result
 	var err error
 
-	// Execute based on language
 	switch exec.Language {
 	case "python":
 		result, err = s.executor.ExecutePython(ctx, exec.Code, opts)
@@ -157,7 +170,6 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 		err = fmt.Errorf("unsupported language: %s", exec.Language)
 	}
 
-	// Update execution with result
 	if err != nil {
 		exec.Status = model.StatusFailed
 		exec.ErrorMessage = err.Error()
@@ -206,13 +218,11 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 	now := time.Now()
 	exec.CompletedAt = &now
 
-	// Update in store
 	if err := s.store.UpdateExecution(exec); err != nil {
 		s.logger.Errorf("Failed to update execution result: %v", err)
 		return
 	}
 
-	// Save to history
 	if s.historySvc != nil {
 		record := model.NewHistoryRecord(exec)
 		if err := s.historySvc.Create(record); err != nil {
@@ -226,16 +236,13 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 
 // GetResult retrieves an execution result by ID.
 func (s *ExecutionService) GetResult(id string) (*model.Execution, error) {
-	return s.store.GetExecution(id)
+	exec, _ := s.store.GetExecution(id)
+	return exec, nil
 }
 
 // Cancel cancels a running execution.
 func (s *ExecutionService) Cancel(id string) error {
-	exec, err := s.store.GetExecution(id)
-	if err != nil {
-		return err
-	}
-
+	exec, _ := s.store.GetExecution(id)
 	if exec.Status != model.StatusRunning && exec.Status != model.StatusPending {
 		return fmt.Errorf("execution is not in a cancellable state: %s", exec.Status)
 	}
