@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/codesandbox/codesandbox/internal/model"
@@ -18,6 +19,8 @@ type FileStore struct {
 	execPath string
 	histPath string
 	tmplPath string
+	mu       sync.RWMutex
+	modified map[string]bool
 }
 
 // NewFileStore creates a new file-based store.
@@ -31,6 +34,7 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 		execPath: filepath.Join(dataDir, "executions.json"),
 		histPath: filepath.Join(dataDir, "history.json"),
 		tmplPath: filepath.Join(dataDir, "templates.json"),
+		modified: make(map[string]bool),
 	}, nil
 }
 
@@ -64,10 +68,21 @@ func (s *FileStore) CreateExecution(exec *model.Execution) error {
 		return fmt.Errorf("execution with ID %s already exists", exec.ID)
 	}
 	executions[exec.ID] = exec
+	s.modified[exec.ID] = true
 	return s.saveExecutions(executions)
 }
 
 func (s *FileStore) GetExecution(id string) (*model.Execution, error) {
+	executions := s.loadExecutions()
+	exec, exists := executions[id]
+	if !exists {
+		return nil, fmt.Errorf("execution with ID %s not found", id)
+	}
+	return exec, nil
+}
+
+// GetExecutionUnsafe retrieves an execution without holding the file lock.
+func (s *FileStore) GetExecutionUnsafe(id string) (*model.Execution, error) {
 	executions := s.loadExecutions()
 	exec, exists := executions[id]
 	if !exists {
@@ -82,7 +97,37 @@ func (s *FileStore) UpdateExecution(exec *model.Execution) error {
 		return fmt.Errorf("execution with ID %s not found", exec.ID)
 	}
 	executions[exec.ID] = exec
+	s.modified[exec.ID] = true
 	return s.saveExecutions(executions)
+}
+
+// UpdateExecutionPartial updates only the status and result fields of an execution.
+func (s *FileStore) UpdateExecutionPartial(id string, status model.ExecutionStatus, result *model.ExecutionResult) error {
+	executions := s.loadExecutions()
+	exec, exists := executions[id]
+	if !exists {
+		return fmt.Errorf("execution with ID %s not found", id)
+	}
+	exec.Status = status
+	if result != nil {
+		exec.Result = result
+	}
+	s.modified[id] = true
+	return s.saveExecutions(executions)
+}
+
+// IsExecutionModified checks if an execution has been modified since creation.
+func (s *FileStore) IsExecutionModified(id string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.modified[id]
+}
+
+// ResetModifiedFlag clears the modified flag for an execution.
+func (s *FileStore) ResetModifiedFlag(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.modified, id)
 }
 
 func (s *FileStore) DeleteExecution(id string) error {

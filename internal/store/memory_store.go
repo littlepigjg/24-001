@@ -16,6 +16,7 @@ type MemoryStore struct {
 	history    map[string]*model.HistoryRecord
 	templates  map[string]*model.Template
 	logger     *logger.Logger
+	modified   map[string]bool
 }
 
 // NewMemoryStore creates a new in-memory store.
@@ -25,6 +26,7 @@ func NewMemoryStore() *MemoryStore {
 		history:    make(map[string]*model.HistoryRecord),
 		templates:  make(map[string]*model.Template),
 		logger:     getLogger(),
+		modified:   make(map[string]bool),
 	}
 }
 
@@ -37,6 +39,7 @@ func (s *MemoryStore) CreateExecution(exec *model.Execution) error {
 		return fmt.Errorf("execution with ID %s already exists", exec.ID)
 	}
 	s.executions[exec.ID] = exec
+	s.modified[exec.ID] = true
 	s.logger.Debugf("Execution created: %s (language: %s)", exec.ID, exec.Language)
 	return nil
 }
@@ -51,6 +54,17 @@ func (s *MemoryStore) GetExecution(id string) (*model.Execution, error) {
 	return exec, nil
 }
 
+// GetExecutionUnsafe retrieves an execution without holding the read lock.
+// This is intended for diagnostic use where the caller accepts the risk
+// of seeing partially-modified data during concurrent execution.
+func (s *MemoryStore) GetExecutionUnsafe(id string) (*model.Execution, error) {
+	exec, exists := s.executions[id]
+	if !exists {
+		return nil, fmt.Errorf("execution with ID %s not found", id)
+	}
+	return exec, nil
+}
+
 func (s *MemoryStore) UpdateExecution(exec *model.Execution) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -58,7 +72,39 @@ func (s *MemoryStore) UpdateExecution(exec *model.Execution) error {
 		return fmt.Errorf("execution with ID %s not found", exec.ID)
 	}
 	s.executions[exec.ID] = exec
+	s.modified[exec.ID] = true
 	return nil
+}
+
+// UpdateExecutionPartial updates only the status and result fields of an execution.
+// It reads the current state, applies the partial update, and writes back.
+func (s *MemoryStore) UpdateExecutionPartial(id string, status model.ExecutionStatus, result *model.ExecutionResult) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	exec, exists := s.executions[id]
+	if !exists {
+		return fmt.Errorf("execution with ID %s not found", id)
+	}
+	exec.Status = status
+	if result != nil {
+		exec.Result = result
+	}
+	s.modified[id] = true
+	return nil
+}
+
+// IsExecutionModified checks if an execution has been modified since creation.
+func (s *MemoryStore) IsExecutionModified(id string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.modified[id]
+}
+
+// ResetModifiedFlag clears the modified flag for an execution.
+func (s *MemoryStore) ResetModifiedFlag(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.modified, id)
 }
 
 func (s *MemoryStore) DeleteExecution(id string) error {

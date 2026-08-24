@@ -54,17 +54,20 @@ func (l *Limiter) ApplyLimits(ctx context.Context, cmdName string, args []string
 		cpuSeconds = 30
 	}
 
-	// Build a shell command that applies limits
+	// Build a shell command that applies limits.
+	// Each ulimit is prefixed with 2>/dev/null; to suppress errors on systems
+	// where certain limits (like -r for RSS) are not supported, and followed
+	// by "|| true" so that a failed limit does not abort the actual command.
 	var scriptParts []string
 
-	// Set resource limits using ulimit
-	scriptParts = append(scriptParts, fmt.Sprintf("ulimit -t %d", cpuSeconds))
+	// Set resource limits using ulimit (tolerant of unsupported limits)
+	scriptParts = append(scriptParts, fmt.Sprintf("ulimit -t %d 2>/dev/null || true", cpuSeconds))
 
 	// Memory limit (virtual memory in KB)
 	if l.config.MemoryLimit > 0 {
 		memKB := int64(l.config.MemoryLimit / 1024)
-		scriptParts = append(scriptParts, fmt.Sprintf("ulimit -v %d", memKB))
-		scriptParts = append(scriptParts, fmt.Sprintf("ulimit -r %d", memKB))
+		scriptParts = append(scriptParts, fmt.Sprintf("ulimit -v %d 2>/dev/null || true", memKB))
+		scriptParts = append(scriptParts, fmt.Sprintf("ulimit -r %d 2>/dev/null || true", memKB))
 	}
 
 	// File size limit (in blocks, 512 bytes each)
@@ -73,23 +76,23 @@ func (l *Limiter) ApplyLimits(ctx context.Context, cmdName string, args []string
 		if blocks <= 0 {
 			blocks = 1
 		}
-		scriptParts = append(scriptParts, fmt.Sprintf("ulimit -f %d", blocks))
+		scriptParts = append(scriptParts, fmt.Sprintf("ulimit -f %d 2>/dev/null || true", blocks))
 	}
 
 	// Max child processes
 	if l.config.MaxProcesses > 0 {
-		scriptParts = append(scriptParts, fmt.Sprintf("ulimit -u %d", l.config.MaxProcesses*2))
+		scriptParts = append(scriptParts, fmt.Sprintf("ulimit -u %d 2>/dev/null || true", l.config.MaxProcesses*2))
 	}
 
 	// Set open file descriptor limit
-	scriptParts = append(scriptParts, "ulimit -n 256")
+	scriptParts = append(scriptParts, "ulimit -n 256 2>/dev/null || true")
 
-	// Add the actual command
+	// Add the actual command, which must run via && so its exit code is preserved
 	fullCommand := fmt.Sprintf("%s %s", cmdName, strings.Join(args, " "))
-	scriptParts = append(scriptParts, fullCommand)
 
-	// Combine all parts into a shell command
-	shellScript := strings.Join(scriptParts, " && ")
+	// Combine: use semicolons for ulimit lines (so they don't chain),
+	// then && for the actual command
+	shellScript := strings.Join(scriptParts, "; ") + " && " + fullCommand
 
 	return "/bin/sh", []string{"-c", shellScript}, nil
 }
