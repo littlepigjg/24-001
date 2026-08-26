@@ -66,7 +66,7 @@ func (e *Executor) ExecutePython(ctx context.Context, code string, opts ExecuteO
 	tmpFile.Close()
 
 	// Build the command with resource limits
-	cmdName, cmdArgs, err := e.limiter.ApplyLimits(ctx, "python3", []string{tmpFile.Name()})
+	cmdName, cmdArgs, err := e.limiter.ApplyLimits(ctx, "python3", []string{tmpFile.Name()}, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +107,7 @@ func (e *Executor) ExecuteJavaScript(ctx context.Context, code string, opts Exec
 	}
 	tmpFile.Close()
 
-	cmdName, cmdArgs, err := e.limiter.ApplyLimits(ctx, "node", []string{tmpFile.Name()})
+	cmdName, cmdArgs, err := e.limiter.ApplyLimits(ctx, "node", []string{tmpFile.Name()}, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +147,7 @@ func (e *Executor) ExecuteShell(ctx context.Context, code string, opts ExecuteOp
 		return nil, fmt.Errorf("failed to make temp file executable: %w", err)
 	}
 
-	cmdName, cmdArgs, err := e.limiter.ApplyLimits(ctx, "/bin/sh", []string{tmpFile.Name()})
+	cmdName, cmdArgs, err := e.limiter.ApplyLimits(ctx, "/bin/sh", []string{tmpFile.Name()}, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +173,7 @@ func (e *Executor) ExecuteCommand(ctx context.Context, cmdName string, args []st
 	safeArgs := make([]string, len(args))
 	copy(safeArgs, args)
 
-	limitedCmd, limitedArgs, err := e.limiter.ApplyLimits(ctx, cmdName, safeArgs)
+	limitedCmd, limitedArgs, err := e.limiter.ApplyLimits(ctx, cmdName, safeArgs, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -271,7 +271,7 @@ func (e *Executor) executeJava(ctx context.Context, code string, opts ExecuteOpt
 	if opts.WorkDir == "" {
 		opts.WorkDir = tmpDir
 	}
-	cmdName, cmdArgs, err := e.limiter.ApplyLimits(ctx, "java", []string{className})
+	cmdName, cmdArgs, err := e.limiter.ApplyLimits(ctx, "java", []string{className}, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -320,7 +320,7 @@ func (e *Executor) executeC(ctx context.Context, code string, opts ExecuteOption
 		opts.WorkDir = tmpDir
 	}
 
-	cmdName, cmdArgs, err := e.limiter.ApplyLimits(ctx, binFile, []string{})
+	cmdName, cmdArgs, err := e.limiter.ApplyLimits(ctx, binFile, []string{}, opts)
 	if err != nil {
 		return nil, err
 	}
