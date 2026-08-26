@@ -57,6 +57,13 @@ func (svc *URLService) Create(ctx context.Context, req *model.CreateReq) (*model
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate code: %w", err)
 		}
+	} else {
+		// Defense in depth: the request already validated the custom code,
+		// but re-run the strict check here so a bad code can never reach the
+		// store's path construction even if a caller bypasses CreateReq.
+		if err := validateURLCode(code); err != nil {
+			return nil, fmt.Errorf("invalid custom code: %w", err)
+		}
 	}
 
 	shortURL := &model.ShortURL{

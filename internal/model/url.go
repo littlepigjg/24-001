@@ -4,7 +4,14 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 )
+
+// customCodeForbiddenSeqs lists byte sequences that must never appear in a
+// custom short code. Any one of them enables path traversal or null-byte
+// tricks against the on-disk store, so a code containing them is rejected
+// outright rather than silently rewritten.
+var customCodeForbiddenSeqs = []string{"..", "/", "\\", "\x00", "."}
 
 type CreateReq struct {
 	RawURL     string `json:"raw_url"`
@@ -29,8 +36,30 @@ func (r *CreateReq) Validate() error {
 		return fmt.Errorf("max_visits exceeds maximum of 1000000")
 	}
 	if r.CustomCode != "" {
-		if len(r.CustomCode) < 3 || len(r.CustomCode) > 16 {
-			return fmt.Errorf("custom_code must be between 3 and 16 characters")
+		if err := validateCustomCode(r.CustomCode); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateCustomCode enforces the strict whitelist for custom short codes:
+// only ASCII letters and digits plus '-' and '_', length 3..16, and none of
+// the forbidden traversal sequences. Rejecting here keeps bad codes from ever
+// reaching the store's path construction.
+func validateCustomCode(code string) error {
+	if len(code) < 3 || len(code) > 16 {
+		return fmt.Errorf("custom_code must be between 3 and 16 characters")
+	}
+	for _, r := range code {
+		if r != '-' && r != '_' && !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+			return fmt.Errorf("custom_code contains invalid character: %q", r)
+		}
+	}
+	lower := strings.ToLower(code)
+	for _, seq := range customCodeForbiddenSeqs {
+		if strings.Contains(lower, seq) {
+			return fmt.Errorf("custom_code contains forbidden sequence: %q", seq)
 		}
 	}
 	return nil
@@ -49,8 +78,8 @@ func (s *ShortURL) Validate() error {
 	if s.Code == "" {
 		return fmt.Errorf("code is required")
 	}
-	if len(s.Code) > 16 {
-		return fmt.Errorf("code exceeds maximum length of 16")
+	if err := validateCustomCode(s.Code); err != nil {
+		return fmt.Errorf("code: %w", err)
 	}
 	if s.RawURL == "" {
 		return fmt.Errorf("raw_url is required")
