@@ -168,7 +168,7 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 			Duration: 0,
 		}
 	} else if result.TimedOut {
-		exec.Status = model.StatusFailed
+		exec.Status = model.StatusTimedOut
 		exec.ErrorMessage = "execution timed out"
 		exec.Result = &model.ExecutionResult{
 			Stdout:   result.Stdout,
@@ -178,14 +178,14 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 			TimedOut: true,
 		}
 	} else if result.Killed {
-		exec.Status = model.StatusFailed
+		exec.Status = model.StatusCanceled
 		exec.ErrorMessage = "execution was killed"
 		exec.Result = &model.ExecutionResult{
 			Stdout:   result.Stdout,
 			Stderr:   result.Stderr,
 			ExitCode: -1,
 			Duration: result.Duration.Milliseconds(),
-			Killed: true,
+			Killed:   true,
 		}
 	} else if result.ExitCode != 0 {
 		exec.Status = model.StatusFailed
@@ -202,6 +202,17 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 			Stderr:   result.Stderr,
 			ExitCode: result.ExitCode,
 			Duration: result.Duration.Milliseconds(),
+		}
+	}
+
+	// If the execution was explicitly canceled while it was running (e.g. via
+	// Cancel), the store already reflects StatusCanceled. Do not clobber that
+	// with the natural-completion status decided above; keep the canceled
+	// status but still record whatever output the process produced.
+	if current, err := s.store.GetExecution(exec.ID); err == nil && current.Status == model.StatusCanceled {
+		exec.Status = model.StatusCanceled
+		if exec.ErrorMessage == "" {
+			exec.ErrorMessage = "execution was canceled"
 		}
 	}
 

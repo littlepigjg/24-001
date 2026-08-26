@@ -111,12 +111,15 @@ func (r *Runner) RunWithTimeout(ctx context.Context, timeout time.Duration, name
 	if err != nil {
 		ctxErr := execCtx.Err()
 		if ctxErr == context.DeadlineExceeded {
-			result.TimedOut = false
-			result.Killed = true
-			result.ExitCode = -1
-		} else if ctxErr == context.Canceled {
+			// The per-execution timeout elapsed; the process was killed on timeout.
 			result.TimedOut = true
 			result.Killed = false
+			result.ExitCode = -1
+		} else if ctxErr == context.Canceled {
+			// The context was canceled (e.g. the caller aborted the execution);
+			// the process was killed as a side effect of cancellation.
+			result.TimedOut = false
+			result.Killed = true
 			result.ExitCode = -1
 		} else {
 			// Try to get the exit code
@@ -182,12 +185,15 @@ func (r *Runner) RunWithStdinTimeout(ctx context.Context, stdin string, timeout 
 	if err != nil {
 		ctxErr := execCtx.Err()
 		if ctxErr == context.DeadlineExceeded {
-			result.TimedOut = false
-			result.Killed = true
-			result.ExitCode = -1
-		} else if ctxErr == context.Canceled {
+			// The per-execution timeout elapsed; the process was killed on timeout.
 			result.TimedOut = true
 			result.Killed = false
+			result.ExitCode = -1
+		} else if ctxErr == context.Canceled {
+			// The context was canceled (e.g. the caller aborted the execution);
+			// the process was killed as a side effect of cancellation.
+			result.TimedOut = false
+			result.Killed = true
 			result.ExitCode = -1
 		} else {
 			if exitErr, ok := err.(*exec.ExitError); ok {
