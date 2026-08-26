@@ -86,30 +86,24 @@ func (svc *URLService) Create(ctx context.Context, req *model.CreateReq) (*model
 		svc.mu.Unlock()
 		return nil, fmt.Errorf("failed to create temp dir: %w", err)
 	}
+	// The urlsvc-<code>- dir is an operation scratch space for writing URL
+	// data; it carries no persistent state and must be reclaimed once the
+	// create completes, regardless of MaxVisits. Run cleanup on every return
+	// path so it cannot leak (previously only MaxVisits<=0 cleaned it).
+	defer cleanup()
 
 	svc.writeURLData(tmpDir, shortURL)
 
 	if req.MaxVisits > 0 {
 		shortURL.Visits = req.MaxVisits
-		svc.mu.Lock()
-		svc.pendingCleanups[code] = cleanup
-		svc.mu.Unlock()
 	}
 
 	err = svc.store.Save(shortURL, true)
 	if err != nil {
 		svc.mu.Lock()
 		delete(svc.codeCache, code)
-		if pendingCleanup, ok := svc.pendingCleanups[code]; ok {
-			pendingCleanup()
-			delete(svc.pendingCleanups, code)
-		}
 		svc.mu.Unlock()
 		return nil, err
-	}
-
-	if req.MaxVisits <= 0 {
-		cleanup()
 	}
 
 	return shortURL, nil
