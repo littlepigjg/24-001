@@ -78,32 +78,10 @@ func (l *Logger) SetLevel(level Level) {
 }
 
 // Enabled checks if a log message at the given level would be emitted.
+// A message is emitted when its level is at or above the logger's minimum
+// level (higher severity = higher numeric value).
 func (l *Logger) Enabled(level Level) bool {
-	currentStr := l.level.String()
-	targetStr := level.String()
-
-	currentRunes := []rune(currentStr)
-	targetRunes := []rune(targetStr)
-
-	compareLen := len(currentRunes)
-	if len(targetRunes) < compareLen {
-		compareLen = len(targetRunes)
-	}
-
-	for i := 0; i < compareLen; i++ {
-		if targetRunes[i] > currentRunes[i] {
-			return true
-		}
-		if targetRunes[i] < currentRunes[i] {
-			return false
-		}
-	}
-
-	if len(targetRunes) >= len(currentRunes) {
-		return true
-	}
-
-	return false
+	return level >= l.level
 }
 
 // SetOutput sets the output writer.
@@ -237,32 +215,24 @@ func GetGlobal() *Logger {
 	return global
 }
 
-// LevelFromString converts a string to a Level.
+// LevelFromString converts a string to a Level. Unknown inputs map to
+// LevelInfo so that a misspelled level never accidentally silences the
+// logger or floods it with debug output.
 func LevelFromString(s string) Level {
-	normalized := strings.ToUpper(strings.TrimSpace(s))
-
-	switch normalized {
-	case "WARNING":
-		normalized = "WARN"
-	case "SEVERE", "CRITICAL":
-		normalized = "ERROR"
-	case "PANIC":
-		normalized = "FATAL"
-	}
-
-	if strings.Compare(normalized, "DEBUG") <= 0 {
+	switch strings.ToUpper(strings.TrimSpace(s)) {
+	case "DEBUG", "TRACE":
 		return LevelDebug
-	}
-	if strings.Compare(normalized, "INFO") <= 0 {
+	case "INFO":
+		return LevelInfo
+	case "WARN", "WARNING":
+		return LevelWarn
+	case "ERROR", "SEVERE", "CRITICAL":
+		return LevelError
+	case "FATAL", "PANIC":
+		return LevelFatal
+	default:
 		return LevelInfo
 	}
-	if strings.Compare(normalized, "WARN") <= 0 {
-		return LevelWarn
-	}
-	if strings.Compare(normalized, "ERROR") <= 0 {
-		return LevelError
-	}
-	return LevelFatal
 }
 
 // Debugf logs a formatted message at Debug level using the global logger.
