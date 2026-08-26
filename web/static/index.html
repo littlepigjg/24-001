@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Code Sandbox - Online Code Execution</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f7fa; color: #333; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px 0; margin-bottom: 30px; }
+        header .container { display: flex; justify-content: space-between; align-items: center; }
+        header h1 { font-size: 1.8em; }
+        nav { display: flex; gap: 20px; }
+        nav a { color: white; text-decoration: none; opacity: 0.9; transition: opacity 0.3s; }
+        nav a:hover { opacity: 1; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        @media (max-width: 768px) { .grid { grid-template-columns: 1fr; } }
+        .card { background: white; border-radius: 12px; padding: 24px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
+        .card h2 { margin-bottom: 16px; color: #333; font-size: 1.2em; }
+        label { display: block; margin-bottom: 8px; color: #666; font-weight: 500; }
+        select, textarea, input { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; font-family: inherit; }
+        textarea { min-height: 300px; font-family: 'Consolas', 'Monaco', monospace; resize: vertical; }
+        .btn { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-size: 16px; font-weight: 600; transition: transform 0.2s, box-shadow 0.2s; }
+        .btn:hover { transform: translateY(-2px); box-shadow: 0 4px 16px rgba(102,126,234,0.4); }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+        .btn-secondary { background: #f0f0f0; color: #666; }
+        .output { background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; font-family: 'Consolas', 'Monaco', monospace; white-space: pre-wrap; min-height: 200px; max-height: 400px; overflow-y: auto; }
+        .output.error { color: #f44747; }
+        .success { color: #4ec9b0; }
+        .error { color: #f44747; }
+        .info-row { display: flex; gap: 16px; margin-top: 12px; font-size: 13px; color: #888; }
+        .template-list { max-height: 300px; overflow-y: auto; }
+        .template-item { padding: 12px; border: 1px solid #eee; border-radius: 8px; margin-bottom: 8px; cursor: pointer; transition: background 0.2s; }
+        .template-item:hover { background: #f8f9fa; }
+        .template-item .name { font-weight: 600; margin-bottom: 4px; }
+        .template-item .meta { font-size: 12px; color: #888; }
+        .tab-container { display: flex; gap: 8px; margin-bottom: 16px; }
+        .tab { padding: 8px 16px; border: none; background: #f0f0f0; border-radius: 8px 8px 0 0; cursor: pointer; }
+        .tab.active { background: #667eea; color: white; }
+        .history-item { padding: 12px; border: 1px solid #eee; border-radius: 8px; margin-bottom: 8px; }
+        .history-item .code-preview { font-family: monospace; color: #888; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .status-badge { display: inline-block; padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+        .status-completed { background: #d4edda; color: #155724; }
+        .status-failed { background: #f8d7da; color: #721c24; }
+        .status-timed_out { background: #fff3cd; color: #856404; }
+        .loading { display: inline-block; width: 16px; height: 16px; border: 2px solid #f3f3f3; border-top: 2px solid #667eea; border-radius: 50%; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>🐱 Code Sandbox</h1>
+            <nav>
+                <a href="#execute">Execute</a>
+                <a href="#templates">Templates</a>
+                <a href="#history">History</a>
+            </nav>
+        </div>
+    </header>
+    <div class="container">
+        <div class="grid">
+            <!-- Code Execution Panel -->
+            <div class="card" id="execute">
+                <h2>Execute Code</h2>
+                <label for="language">Language</label>
+                <select id="language">
+                    <option value="python">Python 3</option>
+                    <option value="javascript">JavaScript (Node.js)</option>
+                    <option value="shell">Shell Script</option>
+                    <option value="java">Java</option>
+                    <option value="c">C</option>
+                </select>
+                <label for="code" style="margin-top: 12px;">Code</label>
+                <textarea id="code" placeholder="Enter your code here...">print("Hello, World!")</textarea>
+                <div style="display: flex; gap: 12px; margin-top: 16px;">
+                    <button class="btn" id="executeBtn" onclick="executeCode()">▶ Run Code</button>
+                    <button class="btn btn-secondary" onclick="clearCode()">Clear</button>
+                </div>
+                <div id="infoRow" class="info-row"></div>
+            </div>
+            <!-- Output Panel -->
+            <div class="card">
+                <h2>Output</h2>
+                <div id="output" class="output">Click "Run Code" to execute your code.</div>
+                <div id="outputInfo" class="info-row" style="margin-top: 12px;"></div>
+            </div>
+        </div>
+        <!-- Templates Section -->
+        <div class="card" id="templates" style="margin-top: 20px;">
+            <h2>Code Templates</h2>
+            <div style="display: flex; gap: 12px; margin-bottom: 16px;">
+                <select id="templateLang">
+                    <option value="">All Languages</option>
+                    <option value="python">Python</option>
+                    <option value="javascript">JavaScript</option>
+                    <option value="shell">Shell</option>
+                    <option value="java">Java</option>
+                    <option value="c">C</option>
+                </select>
+                <button class="btn" onclick="loadTemplates()">Load Templates</button>
+                <button class="btn btn-secondary" onclick="saveTemplate()">Save Current as Template</button>
+            </div>
+            <div id="templateList" class="template-list">
+                <p style="color: #888; text-align: center; padding: 40px;">Load templates to browse available code snippets.</p>
+            </div>
+        </div>
+        <!-- History Section -->
+        <div class="card" id="history" style="margin-top: 20px;">
+            <h2>Execution History</h2>
+            <div style="display: flex; gap: 12px; margin-bottom: 16px;">
+                <button class="btn" onclick="loadHistory()">Refresh History</button>
+                <button class="btn btn-secondary" onclick="clearHistory()">Clear History</button>
+            </div>
+            <div id="historyList">
+                <p style="color: #888; text-align: center; padding: 40px;">No execution history yet.</p>
+            </div>
+        </div>
+    </div>
+    <script>
+        const API_BASE = '';
+
+        async function executeCode() {
+            const code = document.getElementById('code').value;
+            const language = document.getElementById('language').value;
+            const output = document.getElementById('output');
+            const infoRow = document.getElementById('infoRow');
+            const executeBtn = document.getElementById('executeBtn');
+
+            output.className = 'output';
+            output.textContent = 'Executing...';
+            infoRow.innerHTML = '';
+            executeBtn.disabled = true;
+
+            try {
+                const response = await fetch(API_BASE + '/api/execute', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ language, code })
+                });
+
+                const data = await response.json();
+
+                if (data.code !== 0) {
+                    output.className = 'output error';
+                    output.textContent = 'Error: ' + data.message;
+                    return;
+                }
+
+                const exec = data.data;
+                // Poll for result
+                await pollResult(exec.id, output, infoRow);
+            } catch (err) {
+                output.className = 'output error';
+                output.textContent = 'Error: ' + err.message;
+            } finally {
+                executeBtn.disabled = false;
+            }
+        }
+
+        async function pollResult(id, output, infoRow) {
+            const maxAttempts = 60;
+            for (let i = 0; i < maxAttempts; i++) {
+                await new Promise(r => setTimeout(r, 500));
+                try {
+                    const response = await fetch(API_BASE + '/api/execute/' + id);
+                    const data = await response.json();
+                    const exec = data.data;
+
+                    if (exec.status === 'completed') {
+                        displayResult(exec, output, infoRow);
+                        return;
+                    } else if (exec.status === 'failed') {
+                        displayResult(exec, output, infoRow);
+                        return;
+                    } else if (exec.status === 'timed_out') {
+                        output.className = 'output error';
+                        output.textContent = 'Execution timed out.';
+                        infoRow.innerHTML = '<span>⏱ Timeout</span>';
+                        return;
+                    }
+                    // Still running, continue polling
+                } catch (err) {
+                    output.className = 'output error';
+                    output.textContent = 'Error polling result: ' + err.message;
+                    return;
+                }
+            }
+            output.className = 'output error';
+            output.textContent = 'Timeout waiting for execution result.';
+        }
+
+        function displayResult(exec, output, infoRow) {
+            if (exec.result) {
+                output.textContent = exec.result.stdout || '(No output)';
+                if (exec.result.stderr) {
+                    output.className = 'output error';
+                    output.textContent += '\n\nSTDERR:\n' + exec.result.stderr;
+                } else {
+                    output.className = 'output';
+                }
+                infoRow.innerHTML = `
+                    <span>⏱ Duration: ${exec.result.duration}ms</span>
+                    <span>📤 Exit Code: ${exec.result.exit_code}</span>
+                    <span class="${exec.status === 'completed' ? 'success' : 'error'}">
+                        ${exec.status === 'completed' ? '✓ Success' : '✗ Failed'}
+                    </span>
+                `;
+            }
+        }
+
+        function clearCode() {
+            document.getElementById('code').value = '';
+            document.getElementById('output').textContent = '';
+            document.getElementById('infoRow').innerHTML = '';
+        }
+
+        async function loadTemplates() {
+            const lang = document.getElementById('templateLang').value;
+            const list = document.getElementById('templateList');
+            list.innerHTML = '<p style="text-align: center;">Loading templates...</p>';
+
+            try {
+                const url = lang ? `/api/templates?language=${lang}` : '/api/templates';
+                const response = await fetch(API_BASE + url);
+                const data = await response.json();
+                const templates = data.data.templates || [];
+
+                if (templates.length === 0) {
+                    list.innerHTML = '<p style="color: #888; text-align: center; padding: 40px;">No templates found.</p>';
+                    return;
+                }
+
+                list.innerHTML = templates.map(t => `
+                    <div class="template-item" onclick="useTemplate('${t.id}')">
+                        <div class="name">${escapeHtml(t.name)}</div>
+                        <div class="meta">${t.language} ${t.description ? '- ' + escapeHtml(t.description) : ''} • Usage: ${t.usage_count || 0}</div>
+                    </div>
+                `).join('');
+            } catch (err) {
+                list.innerHTML = '<p style="color: #f44747;">Error loading templates: ' + err.message + '</p>';
+            }
+        }
+
+        async function useTemplate(id) {
+            try {
+                const response = await fetch(API_BASE + '/api/templates/' + id);
+                const data = await response.json();
+                const t = data.data;
+                document.getElementById('language').value = t.language;
+                document.getElementById('code').value = t.code;
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            } catch (err) {
+                alert('Error loading template: ' + err.message);
+            }
+        }
+
+        async function saveTemplate() {
+            const name = prompt('Enter template name:');
+            if (!name) return;
+            const language = document.getElementById('language').value;
+            const code = document.getElementById('code').value;
+            const description = prompt('Enter description (optional):') || '';
+
+            try {
+                const response = await fetch(API_BASE + '/api/templates', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, language, code, description, is_public: true })
+                });
+                const data = await response.json();
+                if (data.code === 0) {
+                    alert('Template saved successfully!');
+                    loadTemplates();
+                } else {
+                    alert('Error: ' + data.message);
+                }
+            } catch (err) {
+                alert('Error: ' + err.message);
+            }
+        }
+
+        async function loadHistory() {
+            const list = document.getElementById('historyList');
+            list.innerHTML = '<p style="text-align: center;">Loading history...</p>';
+
+            try {
+                const response = await fetch(API_BASE + '/api/history?page_size=10');
+                const data = await response.json();
+                const records = data.data.records || [];
+
+                if (records.length === 0) {
+                    list.innerHTML = '<p style="color: #888; text-align: center; padding: 40px;">No history records yet.</p>';
+                    return;
+                }
+
+                list.innerHTML = records.map(r => `
+                    <div class="history-item">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <span class="status-badge status-${r.status}">${r.status}</span>
+                                <strong>${r.language}</strong>
+                            </div>
+                            <span style="font-size: 13px; color: #888;">${r.duration}ms</span>
+                        </div>
+                        <div class="code-preview">${escapeHtml(r.code.substring(0, 100))}</div>
+                    </div>
+                `).join('');
+            } catch (err) {
+                list.innerHTML = '<p style="color: #f44747;">Error: ' + err.message + '</p>';
+            }
+        }
+
+        async function clearHistory() {
+            if (!confirm('Are you sure you want to clear all history?')) return;
+            try {
+                const response = await fetch(API_BASE + '/api/history', { method: 'DELETE' });
+                const data = await response.json();
+                if (data.code === 0) {
+                    loadHistory();
+                }
+            } catch (err) {
+                alert('Error: ' + err.message);
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Load initial data
+        loadTemplates();
+        loadHistory();
+    </script>
+</body>
+</html>
