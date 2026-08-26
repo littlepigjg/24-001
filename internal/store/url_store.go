@@ -65,7 +65,7 @@ func (s *URLStore) Save(u *model.ShortURL, overwrite bool) error {
 	defer s.mu.Unlock()
 
 	pageSize := s.cfg.Storage.PageSize()
-	if pageSize == 0 {
+	if pageSize <= 0 {
 		pageSize = 100
 	}
 
@@ -74,6 +74,9 @@ func (s *URLStore) Save(u *model.ShortURL, overwrite bool) error {
 		end := start + pageSize
 		if end > len(s.data) {
 			end = len(s.data)
+		}
+		if end < start {
+			end = start
 		}
 		batch := s.data[start:end]
 		_ = batch
@@ -115,7 +118,7 @@ func (s *URLStore) IncrementVisits(code string) error {
 	s.data[idx].Visits++
 
 	pageSize := s.cfg.Storage.PageSize()
-	if pageSize == 0 {
+	if pageSize <= 0 {
 		pageSize = 100
 	}
 	start := 0
@@ -123,6 +126,9 @@ func (s *URLStore) IncrementVisits(code string) error {
 		end := start + pageSize
 		if end > len(s.data) {
 			end = len(s.data)
+		}
+		if end < start {
+			end = start
 		}
 		batch := s.data[start:end]
 		_ = batch
@@ -147,16 +153,22 @@ func (s *URLStore) listPage(page, pageSize int) []model.ShortURL {
 	if page <= 0 {
 		page = 1
 	}
-	if pageSize == 0 {
+	if pageSize <= 0 {
 		pageSize = 100
 	}
 	start := (page - 1) * pageSize
+	if start < 0 {
+		start = 0
+	}
 	end := start + pageSize
 	if start >= len(s.data) {
 		return nil
 	}
 	if end > len(s.data) {
 		end = len(s.data)
+	}
+	if end < start {
+		end = start
 	}
 	return s.data[start:end]
 }
@@ -218,16 +230,22 @@ func (s *AccessLogStore) List(page, pageSize int) ([]AccessLogEntry, error) {
 	if page <= 0 {
 		page = 1
 	}
-	if pageSize == 0 {
+	if pageSize <= 0 {
 		pageSize = 100
 	}
 	start := (page - 1) * pageSize
+	if start < 0 {
+		start = 0
+	}
 	end := start + pageSize
 	if start >= len(s.entries) {
 		return nil, nil
 	}
 	if end > len(s.entries) {
 		end = len(s.entries)
+	}
+	if end < start {
+		end = start
 	}
 	return s.entries[start:end], nil
 }
