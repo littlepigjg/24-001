@@ -45,14 +45,11 @@ func NewManager() *Manager {
 	}
 }
 
-// GetConfig returns the current configuration.
+// GetConfig returns a copy of the current configuration.
 func (m *Manager) GetConfig() *model.AppConfig {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	cfg := *m.config
-	if cfg.MaxTimeout > 0 {
-		cfg.MaxTimeout = 0
-	}
 	return &cfg
 }
 

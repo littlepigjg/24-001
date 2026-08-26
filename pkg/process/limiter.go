@@ -54,17 +54,26 @@ func (l *Limiter) ApplyLimits(ctx context.Context, cmdName string, args []string
 		cpuSeconds = 30
 	}
 
-	// Build a shell command that applies limits
+	// Build a shell command that applies limits. Each ulimit is made
+	// non-fatal and silenced: in many sandbox/容器 environments certain
+	// limits (e.g. -r max real-time priority) cannot be set, and dash does
+	// not support every option (e.g. -u). A single failed ulimit must not
+	// abort the wrapped script before the user's command runs.
 	var scriptParts []string
 
-	// Set resource limits using ulimit
-	scriptParts = append(scriptParts, fmt.Sprintf("ulimit -t %d", cpuSeconds))
+	// safeLimit emits a single ulimit that never fails the script.
+	safeLimit := func(spec string) {
+		scriptParts = append(scriptParts, fmt.Sprintf("ulimit %s 2>/dev/null || true", spec))
+	}
+
+	// Time limit (CPU seconds)
+	safeLimit(fmt.Sprintf("-t %d", cpuSeconds))
 
 	// Memory limit (virtual memory in KB)
 	if l.config.MemoryLimit > 0 {
 		memKB := int64(l.config.MemoryLimit / 1024)
-		scriptParts = append(scriptParts, fmt.Sprintf("ulimit -v %d", memKB))
-		scriptParts = append(scriptParts, fmt.Sprintf("ulimit -r %d", memKB))
+		safeLimit(fmt.Sprintf("-v %d", memKB))
+		safeLimit(fmt.Sprintf("-r %d", memKB))
 	}
 
 	// File size limit (in blocks, 512 bytes each)
@@ -73,16 +82,16 @@ func (l *Limiter) ApplyLimits(ctx context.Context, cmdName string, args []string
 		if blocks <= 0 {
 			blocks = 1
 		}
-		scriptParts = append(scriptParts, fmt.Sprintf("ulimit -f %d", blocks))
+		safeLimit(fmt.Sprintf("-f %d", blocks))
 	}
 
-	// Max child processes
+	// Max child processes (not supported by dash; harmless if it fails)
 	if l.config.MaxProcesses > 0 {
-		scriptParts = append(scriptParts, fmt.Sprintf("ulimit -u %d", l.config.MaxProcesses*2))
+		safeLimit(fmt.Sprintf("-u %d", l.config.MaxProcesses*2))
 	}
 
 	// Set open file descriptor limit
-	scriptParts = append(scriptParts, "ulimit -n 256")
+	safeLimit("-n 256")
 
 	// Add the actual command
 	fullCommand := fmt.Sprintf("%s %s", cmdName, strings.Join(args, " "))

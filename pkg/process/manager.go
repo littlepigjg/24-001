@@ -59,10 +59,26 @@ func (r *Runner) Run(ctx context.Context, name string, args ...string) (*Result,
 
 // RunWithTimeout executes a command with a specific timeout.
 func (r *Runner) RunWithTimeout(ctx context.Context, timeout time.Duration, name string, args ...string) (*Result, error) {
-	execCtx, cancel := context.WithTimeout(ctx, timeout)
+	if timeout <= 0 {
+		timeout = r.DefaultTimeout
+	}
+	execCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	cmd := exec.CommandContext(execCtx, name, args...)
+	setProcessGroup(cmd)
+
+	// Run the child in its own process group and, on timeout, SIGKILL the
+	// whole group. This ensures grandchildren (e.g. `sleep` under a wrapped
+	// `/bin/sh -c`) die with the parent instead of being orphaned and
+	// blocking cmd.Run() until they exit on their own.
+	var timedOut bool
+	timer := time.AfterFunc(timeout, func() {
+		timedOut = true
+		killProcessGroup(cmd)
+		cancel()
+	})
+	defer timer.Stop()
 
 	if r.WorkDir != "" {
 		cmd.Dir = r.WorkDir
@@ -100,10 +116,14 @@ func (r *Runner) RunWithTimeout(ctx context.Context, timeout time.Duration, name
 	}
 
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		if timedOut {
+			result.TimedOut = true
+			result.ExitCode = -1
+		} else if exitErr, ok := err.(*exec.ExitError); ok {
 			result.ExitCode = exitErr.ExitCode()
 		} else {
 			result.Stderr = err.Error()
+			result.ExitCode = -1
 		}
 	}
 
@@ -117,10 +137,22 @@ func (r *Runner) RunWithStdin(ctx context.Context, stdin string, name string, ar
 
 // RunWithStdinTimeout executes a command with standard input and a specific timeout.
 func (r *Runner) RunWithStdinTimeout(ctx context.Context, stdin string, timeout time.Duration, name string, args ...string) (*Result, error) {
-	execCtx, cancel := context.WithTimeout(ctx, timeout)
+	if timeout <= 0 {
+		timeout = r.DefaultTimeout
+	}
+	execCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	cmd := exec.CommandContext(execCtx, name, args...)
+	setProcessGroup(cmd)
+
+	var timedOut bool
+	timer := time.AfterFunc(timeout, func() {
+		timedOut = true
+		killProcessGroup(cmd)
+		cancel()
+	})
+	defer timer.Stop()
 
 	if r.WorkDir != "" {
 		cmd.Dir = r.WorkDir
@@ -159,10 +191,14 @@ func (r *Runner) RunWithStdinTimeout(ctx context.Context, stdin string, timeout 
 	}
 
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		if timedOut {
+			result.TimedOut = true
+			result.ExitCode = -1
+		} else if exitErr, ok := err.(*exec.ExitError); ok {
 			result.ExitCode = exitErr.ExitCode()
 		} else {
 			result.Stderr = err.Error()
+			result.ExitCode = -1
 		}
 	}
 

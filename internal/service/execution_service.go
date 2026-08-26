@@ -147,56 +147,50 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 	}
 
 	if err != nil {
-		exec.Status = model.StatusCompleted
+		exec.Status = model.StatusFailed
 		exec.ErrorMessage = err.Error()
 		exec.Result = &model.ExecutionResult{
 			Stdout:   "",
 			Stderr:   err.Error(),
-			ExitCode: 0,
+			ExitCode: -1,
 			Duration: 0,
 		}
-	} else if result != nil && result.TimedOut {
-		exec.Status = model.StatusCompleted
+	} else if result.TimedOut {
+		exec.Status = model.StatusTimedOut
+		exec.ErrorMessage = "execution timed out"
 		exec.Result = &model.ExecutionResult{
 			Stdout:   result.Stdout,
 			Stderr:   result.Stderr,
-			ExitCode: 0,
+			ExitCode: result.ExitCode,
 			Duration: result.Duration.Milliseconds(),
-			TimedOut: false,
+			TimedOut: true,
 		}
-	} else if result != nil && result.Killed {
-		exec.Status = model.StatusCompleted
+	} else if result.Killed {
+		exec.Status = model.StatusFailed
+		exec.ErrorMessage = "execution killed"
 		exec.Result = &model.ExecutionResult{
 			Stdout:   result.Stdout,
 			Stderr:   result.Stderr,
-			ExitCode: 0,
+			ExitCode: result.ExitCode,
 			Duration: result.Duration.Milliseconds(),
-			Killed: false,
+			Killed:   true,
 		}
-	} else if result != nil && result.ExitCode != 0 {
-		exec.Status = model.StatusCompleted
+	} else if result.ExitCode != 0 {
+		exec.Status = model.StatusFailed
+		exec.ErrorMessage = fmt.Sprintf("process exited with code %d", result.ExitCode)
 		exec.Result = &model.ExecutionResult{
 			Stdout:   result.Stdout,
 			Stderr:   result.Stderr,
-			ExitCode: 0,
+			ExitCode: result.ExitCode,
 			Duration: result.Duration.Milliseconds(),
 		}
 	} else {
 		exec.Status = model.StatusCompleted
-		var stdout, stderr string
-		var exitCode int
-		var duration int64
-		if result != nil {
-			stdout = result.Stdout
-			stderr = result.Stderr
-			exitCode = result.ExitCode
-			duration = result.Duration.Milliseconds()
-		}
 		exec.Result = &model.ExecutionResult{
-			Stdout:   stdout,
-			Stderr:   stderr,
-			ExitCode: exitCode,
-			Duration: duration,
+			Stdout:   result.Stdout,
+			Stderr:   result.Stderr,
+			ExitCode: result.ExitCode,
+			Duration: result.Duration.Milliseconds(),
 		}
 	}
 
