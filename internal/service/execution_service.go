@@ -185,6 +185,18 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 			Duration: result.Duration.Milliseconds(),
 			Killed: true,
 		}
+	} else if result.ExitCode == process.ExitCodeOutputOverflow {
+		// Output exceeded the capture limit and was truncated. Mark the run
+		// as failed so the caller knows the returned stdout/stderr is partial,
+		// but still return what was captured before the limit was hit.
+		exec.Status = model.StatusFailed
+		exec.ErrorMessage = "output exceeded maximum size and was truncated"
+		exec.Result = &model.ExecutionResult{
+			Stdout:   result.Stdout,
+			Stderr:   result.Stderr,
+			ExitCode: result.ExitCode,
+			Duration: result.Duration.Milliseconds(),
+		}
 	} else if result.ExitCode != 0 {
 		exec.Status = model.StatusFailed
 		exec.Result = &model.ExecutionResult{
@@ -194,12 +206,7 @@ func (s *ExecutionService) runExecution(exec *model.Execution) {
 			Duration: result.Duration.Milliseconds(),
 		}
 	} else {
-		if result.TimedOut && result.Stdout == "" {
-			exec.Status = model.StatusFailed
-			exec.ErrorMessage = "output capture was interrupted"
-		} else {
-			exec.Status = model.StatusCompleted
-		}
+		exec.Status = model.StatusCompleted
 		exec.Result = &model.ExecutionResult{
 			Stdout:   result.Stdout,
 			Stderr:   result.Stderr,
