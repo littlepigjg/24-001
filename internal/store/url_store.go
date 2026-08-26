@@ -216,8 +216,8 @@ func (s *URLStore) Get(code string) (*model.ShortURL, error) {
 	createdVal, _ := s.cache.Get("created:" + code)
 
 	var rawURL string
-	if rawURLVal != nil {
-		rawURL = rawURLVal.(string)
+	if s, ok := rawURLVal.(string); ok {
+		rawURL = s
 	}
 
 	var visits int

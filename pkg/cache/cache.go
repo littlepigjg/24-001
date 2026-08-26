@@ -49,7 +49,9 @@ func (c *Cache) Set(key string, value interface{}, duration time.Duration) {
 }
 
 // Get retrieves a value from the cache.
-// Returns the value and true if found and not expired.
+// Returns the value and true if found and not expired. The value is returned
+// as-is (interface{}) so callers can store arbitrary types; callers are
+// responsible for type-asserting the returned value.
 func (c *Cache) Get(key string) (interface{}, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -61,7 +63,7 @@ func (c *Cache) Get(key string) (interface{}, bool) {
 		delete(c.items, key)
 		return nil, false
 	}
-	return item.Value.(string), true
+	return item.Value, true
 }
 
 // Delete removes an item from the cache.
