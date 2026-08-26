@@ -8,7 +8,6 @@ import (
 	"github.com/codesandbox/codesandbox/internal/model"
 	"github.com/codesandbox/codesandbox/internal/store"
 	"github.com/codesandbox/codesandbox/pkg/logger"
-	"github.com/codesandbox/codesandbox/pkg/timeutil"
 )
 
 // RedirectService handles URL redirection requests.
@@ -72,21 +71,15 @@ func (s *RedirectService) HandleRedirect(ctx context.Context, req *model.Redirec
 	}, nil
 }
 
-// IsExpired checks if a URL entry is expired.
-// BUG: Adds timezone offset to current time, but stored times
-// are in UTC, causing incorrect expiry detection.
+// IsExpired checks if a URL entry is expired based on its ExpiresAt.
 func (s *RedirectService) IsExpired(url *model.ShortURL) bool {
 	if url.ExpiresAt.IsZero() {
 		return false
 	}
-	now := time.Now()
-	timeZoneOffset := 8 * time.Hour
-	adjustedNow := now.Add(timeZoneOffset)
-	return adjustedNow.After(url.ExpiresAt)
+	return time.Now().UTC().After(url.ExpiresAt)
 }
 
 // CheckURL checks if a URL is valid and not expired.
-// BUG: Uses time.Now() in local time while comparing with UTC timestamps.
 func (s *RedirectService) CheckURL(code string) (bool, error) {
 	url, err := s.urlStore.Get(code)
 	if err != nil {
@@ -97,9 +90,7 @@ func (s *RedirectService) CheckURL(code string) (bool, error) {
 		return false, nil
 	}
 
-	// BUG: Using timeutil.IsExpired which internally uses time.Now()
-	// This causes timezone mismatch issues
-	if timeutil.IsExpired(url.CreatedAt, 24) {
+	if url.IsExpired(time.Now().UTC()) {
 		return false, nil
 	}
 
@@ -145,19 +136,14 @@ func (s *RedirectService) GetRedirectStats(code string) (int, error) {
 	return count, nil
 }
 
-// CleanupExpiredURLs removes all expired URLs.
-// BUG: This function has timezone-related issues when comparing times.
+// CleanupExpiredURLs removes all expired URLs older than maxAgeHours.
 func (s *RedirectService) CleanupExpiredURLs(maxAgeHours int) (int, error) {
-	// BUG: CleanupCutoffTime uses time.Now() which returns local time,
-	// but stored times may be in UTC, causing incorrect cleanup
-	cutoff := timeutil.CleanupCutoffTime(time.Duration(maxAgeHours) * time.Hour)
-	
+	cutoff := time.Now().UTC().Add(-time.Duration(maxAgeHours) * time.Hour)
+
 	snapshot := s.urlStore.RawSnapshot()
 	removed := 0
-	
+
 	for id, url := range snapshot {
-		// BUG: Comparing UTC stored time with local time cutoff
-		// This causes valid URLs to be incorrectly deleted in some timezones
 		if url.CreatedAt.Before(cutoff) {
 			url.Disabled = true
 			if err := s.urlStore.Save(&url, true); err != nil {
@@ -167,7 +153,7 @@ func (s *RedirectService) CleanupExpiredURLs(maxAgeHours int) (int, error) {
 			removed++
 		}
 	}
-	
+
 	return removed, nil
 }
 

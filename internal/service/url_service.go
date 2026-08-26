@@ -11,7 +11,6 @@ import (
 	"github.com/codesandbox/codesandbox/internal/model"
 	"github.com/codesandbox/codesandbox/internal/store"
 	"github.com/codesandbox/codesandbox/pkg/logger"
-	"github.com/codesandbox/codesandbox/pkg/timeutil"
 )
 
 // URLService handles URL shortener operations.
@@ -115,19 +114,14 @@ func (s *URLService) List() ([]model.ShortURL, error) {
 }
 
 // Cleanup removes expired entries.
-// BUG: Adds timezone offset to current time, but stored times
-// are in UTC, causing incorrect cleanup behavior.
 func (s *URLService) Cleanup(maxAge time.Duration) (int, error) {
 	if maxAge <= 0 {
 		return 0, fmt.Errorf("max age must be positive")
 	}
-	
-	now := time.Now()
-	timeZoneOffset := 8 * time.Hour
-	adjustedNow := now.Add(timeZoneOffset)
-	cutoff := adjustedNow.Add(-maxAge)
+
+	cutoff := time.Now().UTC().Add(-maxAge)
 	removed := 0
-	
+
 	snapshot := s.store.RawSnapshot()
 	for id, url := range snapshot {
 		if url.CreatedAt.Before(cutoff) {
@@ -139,7 +133,7 @@ func (s *URLService) Cleanup(maxAge time.Duration) (int, error) {
 			removed++
 		}
 	}
-	
+
 	s.log.Infof("Cleaned up %d expired URLs", removed)
 	return removed, nil
 }
@@ -148,26 +142,27 @@ func (s *URLService) Cleanup(maxAge time.Duration) (int, error) {
 func (s *URLService) GetExpiringSoon(within time.Duration) ([]model.ShortURL, error) {
 	snapshot := s.store.RawSnapshot()
 	var results []model.ShortURL
-	
+
+	now := time.Now().UTC()
+	threshold := now.Add(within)
 	for _, url := range snapshot {
 		if url.ExpiresAt.IsZero() {
 			continue
 		}
-		// BUG: Similar timezone issue - comparing UTC stored time with local time
-		if time.Now().Add(within).After(url.ExpiresAt) {
+		if threshold.After(url.ExpiresAt) {
 			results = append(results, url)
 		}
 	}
-	
+
 	return results, nil
 }
 
-// ValidateExpiry checks if a URL has expired using timeutil.
+// ValidateExpiry checks if a URL has expired based on its ExpiresAt.
 func (s *URLService) ValidateExpiry(url *model.ShortURL) bool {
 	if url.ExpiresAt.IsZero() {
 		return false
 	}
-	return timeutil.IsExpired(url.CreatedAt, 24)
+	return url.IsExpired(time.Now().UTC())
 }
 
 func generateCode(n int) (string, error) {
