@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -307,6 +309,10 @@ func withRequestTimeout(next http.Handler) http.Handler {
 }
 
 // withBodyValidation validates request bodies for POST/PUT requests.
+// It reads the body once for validation and, on success, restores it on the
+// request so downstream handlers can decode it. The body (and therefore the
+// underlying keep-alive connection) is closed by the handler via
+// response.CloseRequestBody / response.DecodeJSONBody.
 func withBodyValidation(next http.Handler) http.Handler {
 	log := logger.GetGlobal()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -317,7 +323,9 @@ func withBodyValidation(next http.Handler) http.Handler {
 				response.BadRequest(w, fmt.Sprintf("body validation failed: %v", err))
 				return
 			}
-			_ = body
+			// Restore the body so handlers can decode it. CloseRequestBody in
+			// the handler will close this reader.
+			r.Body = io.NopCloser(bytes.NewReader(body))
 		}
 		next.ServeHTTP(w, r)
 	})

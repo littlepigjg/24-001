@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -33,8 +32,10 @@ func (h *TemplateHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	defer response.CloseRequestBody(r)
+
 	var req model.TemplateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := response.DecodeJSONBody(r, &req); err != nil {
 		response.BadRequest(w, fmt.Sprintf("invalid request body: %v", err))
 		return
 	}
@@ -93,8 +94,10 @@ func (h *TemplateHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	defer response.CloseRequestBody(r)
+
 	var req model.TemplateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := response.DecodeJSONBody(r, &req); err != nil {
 		response.BadRequest(w, fmt.Sprintf("invalid request body: %v", err))
 		return
 	}

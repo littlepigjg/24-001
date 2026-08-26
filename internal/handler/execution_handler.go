@@ -16,9 +16,9 @@ import (
 
 // ExecutionHandler handles HTTP requests for code execution.
 type ExecutionHandler struct {
-	svc        *service.ExecutionService
-	validator  *service.CodeValidator
-	logger     *logger.Logger
+	svc       *service.ExecutionService
+	validator *service.CodeValidator
+	logger    *logger.Logger
 }
 
 // NewExecutionHandler creates a new ExecutionHandler.
@@ -37,11 +37,7 @@ func (h *ExecutionHandler) Execute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := response.ValidateRequestBody(r)
-	if err != nil {
-		response.BadRequest(w, fmt.Sprintf("invalid request body: %v", err))
-		return
-	}
+	defer response.CloseRequestBody(r)
 
 	var req model.ExecutionRequest
 	if err := response.DecodeJSONBody(r, &req); err != nil {
@@ -167,11 +163,7 @@ func (h *ExecutionHandler) BatchExecute(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	_, err := response.ValidateRequestBody(r)
-	if err != nil {
-		response.BadRequest(w, fmt.Sprintf("invalid request body: %v", err))
-		return
-	}
+	defer response.CloseRequestBody(r)
 
 	var reqs []model.ExecutionRequest
 	if err := response.DecodeJSONBody(r, &reqs); err != nil {
